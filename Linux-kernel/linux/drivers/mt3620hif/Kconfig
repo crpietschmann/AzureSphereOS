@@ -1,0 +1,4 @@
+menuconfig MT3620HIF
+	tristate "MT3620 HIF support"
+	---help---
+	  Wireless driver for the MT3620 SoC

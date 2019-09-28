@@ -1,0 +1,113 @@
+From c9515e8f97666c7738fc423333c65ed3ff4a5daf Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Mon, 14 Aug 2017 09:00:49 -0700
+Subject: [PATCH 1/2] Used cached reads for reading code locations during step
+ processing.
+
+%% original patch: 0012-Used-cached-reads-for-reading-code-locations-during-.patch
+---
+ gdb/arm-tdep.c   | 46 +++++++++++++++++++++++-----------------------
+ gdb/breakpoint.c |  2 +-
+ gdb/frame.c      |  2 +-
+ 3 files changed, 25 insertions(+), 25 deletions(-)
+
+diff --git a/gdb/arm-tdep.c b/gdb/arm-tdep.c
+index 5a2d490..c3a9c74 100644
+--- a/gdb/arm-tdep.c
++++ b/gdb/arm-tdep.c
+@@ -790,7 +790,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+ 	  CORE_ADDR loc;
+ 
+ 	  loc = start + 4 + bits (insn, 0, 7) * 4;
+-	  constant = read_memory_unsigned_integer (loc, 4, byte_order);
++	  constant = read_code_unsigned_integer (loc, 4, byte_order);
+ 	  regs[bits (insn, 8, 10)] = pv_constant (constant);
+ 	}
+       else if (thumb_insn_size (insn) == 4) /* 32-bit Thumb-2 instructions.  */
+@@ -1030,7 +1030,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+ 	      else
+ 		loc = start + 4 - offset;
+ 
+-	      constant = read_memory_unsigned_integer (loc, 4, byte_order);
++	      constant = read_code_unsigned_integer (loc, 4, byte_order);
+ 	      regs[bits (inst2, 12, 15)] = pv_constant (constant);
+ 	    }
+ 
+@@ -1046,10 +1046,10 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+ 	      else
+ 		loc = start + 4 - offset;
+ 
+-	      constant = read_memory_unsigned_integer (loc, 4, byte_order);
++	      constant = read_code_unsigned_integer (loc, 4, byte_order);
+ 	      regs[bits (inst2, 12, 15)] = pv_constant (constant);
+ 
+-	      constant = read_memory_unsigned_integer (loc + 4, 4, byte_order);
++	      constant = read_code_unsigned_integer (loc + 4, 4, byte_order);
+ 	      regs[bits (inst2, 8, 11)] = pv_constant (constant);
+ 	    }
+ 
+@@ -1148,7 +1148,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
+ 	  *destreg = bits (insn1, 8, 10);
+ 	  *offset = 2;
+ 	  address = (pc & 0xfffffffc) + 4 + (bits (insn1, 0, 7) << 2);
+-	  address = read_memory_unsigned_integer (address, 4,
++	  address = read_code_unsigned_integer (address, 4,
+ 						  byte_order_for_code);
+ 	}
+       else if ((insn1 & 0xfbf0) == 0xf240) /* movw Rd, #const */
+@@ -1181,7 +1181,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
+       if ((insn & 0x0e5f0000) == 0x041f0000) /* ldr Rd, [PC, #immed] */
+ 	{
+ 	  address = bits (insn, 0, 11) + pc + 8;
+-	  address = read_memory_unsigned_integer (address, 4,
++	  address = read_code_unsigned_integer(address, 4,
+ 						  byte_order_for_code);
+ 
+ 	  *destreg = bits (insn, 12, 15);
+@@ -2927,7 +2927,7 @@ arm_stub_unwind_sniffer (const struct frame_unwind *self,
+   if (in_plt_section (addr_in_block)
+       /* We also use the stub winder if the target memory is unreadable
+ 	 to avoid having the prologue unwinder trying to read it.  */
+-      || target_read_memory (pc, dummy, 4) != 0)
++      || target_read_code (pc, dummy, 4) != 0)
+     return 1;
+ 
+   if (find_pc_partial_function (pc, &name, &start_addr, NULL) == 0
+@@ -6261,7 +6261,7 @@ ULONGEST
+ arm_get_next_pcs_read_memory_unsigned_integer (CORE_ADDR memaddr, int len,
+ 					       int byte_order)
+ {
+-  return read_memory_unsigned_integer (memaddr, len,
++  return read_code_unsigned_integer (memaddr, len,
+ 				       (enum bfd_endian) byte_order);
+ }
+ 
+diff --git a/gdb/breakpoint.c b/gdb/breakpoint.c
+index f99a7ab..7b5452a 100644
+--- a/gdb/breakpoint.c
++++ b/gdb/breakpoint.c
+@@ -9097,7 +9097,7 @@ program_breakpoint_here_p (struct gdbarch *gdbarch, CORE_ADDR address)
+      breakpoints they are permanent.  */
+   cleanup = make_show_memory_breakpoints_cleanup (0);
+ 
+-  if (target_read_memory (address, target_mem, len) == 0
++  if (target_read_code (address, target_mem, len) == 0
+       && memcmp (target_mem, bpoint, len) == 0)
+     retval = 1;
+ 
+diff --git a/gdb/frame.c b/gdb/frame.c
+index d621dd7..f35816c 100644
+--- a/gdb/frame.c
++++ b/gdb/frame.c
+@@ -2674,7 +2674,7 @@ safe_frame_unwind_memory (struct frame_info *this_frame,
+ 			  CORE_ADDR addr, gdb_byte *buf, int len)
+ {
+   /* NOTE: target_read_memory returns zero on success!  */
+-  return !target_read_memory (addr, buf, len);
++  return !target_read_stack (addr, buf, len);
+ }
+ 
+ /* Architecture methods.  */
+-- 
+2.7.4
+

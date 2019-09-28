@@ -1,0 +1,194 @@
+From 61791214e5f3016da18fcd22df0939d879662134 Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Tue, 31 Oct 2017 13:44:44 -0700
+Subject: [PATCH] Implement vFile:buildid in hostio
+
+---
+ gdb/gdbserver/hostio.c | 143 +++++++++++++++++++++++++++++++++++++++++++++++++
+ gdb/gdbserver/server.c |   2 +
+ 2 files changed, 145 insertions(+)
+
+diff --git a/gdb/gdbserver/hostio.c b/gdb/gdbserver/hostio.c
+index cd40e28..d42792a 100644
+--- a/gdb/gdbserver/hostio.c
++++ b/gdb/gdbserver/hostio.c
+@@ -28,6 +28,7 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include "fileio.h"
++#include "elf.h"
+ 
+ extern int remote_debug;
+ 
+@@ -589,6 +590,146 @@ handle_readlink (char *own_buf, int *new_packet_len)
+     sprintf (own_buf, "F-1,%x", FILEIO_ENAMETOOLONG);
+ }
+ 
++static char*
++read_file_data(int fd, int loc, int len, char* data)
++{
++	int free_data = 0;
++	if (data == NULL)
++	{
++		free_data = 1;
++		data = (char *)xmalloc(len);
++	}
++
++	int ret = lseek(fd, loc, SEEK_SET);
++	if (ret != -1)
++		ret = read(fd, data, len);
++
++	if (ret == -1)
++	{
++		if (free_data)
++			free(data);
++		return NULL;
++	}
++	return data;
++}
++
++static void
++handle_buildid(char *own_buf, int *new_packet_len)
++{
++	char filename[HOSTIO_PATH_MAX];
++	char *p;
++	int flags = O_RDONLY;
++	int fd;
++	mode_t mode = 0;
++
++	p = own_buf + strlen("vFile:buildid:");
++
++	if (require_filename(&p, filename)
++		|| require_end(p))
++	{
++		hostio_packet_error(own_buf);
++		return;
++	}
++
++	if (hostio_fs_pid != 0 && the_target->multifs_open != NULL)
++		fd = the_target->multifs_open(hostio_fs_pid, filename,
++			flags, mode);
++	else
++		fd = open(filename, flags, mode);
++	if (fd == -1)
++	{
++		hostio_error(own_buf);
++		return;
++	}
++
++	/* read elf header */
++	Elf32_Ehdr file_header;
++	char* hdr;
++	hdr = read_file_data(fd, 0, sizeof(file_header), (char*)&file_header);
++	if (hdr == NULL)
++	{
++		close(fd);
++		hostio_error(own_buf);
++		return;
++	}
++	char elf[] = { ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFCLASS32 };
++	for (int i = 0; i < sizeof(elf); ++i)
++	{
++		if (file_header.e_ident[i] != elf[i])
++		{
++			close(fd);
++			write_enn(own_buf);
++			return;
++		}
++	}
++	if (file_header.e_shentsize != sizeof(Elf32_Shdr) || file_header.e_shstrndx >= file_header.e_shnum)
++	{
++		close(fd);
++		write_enn(own_buf);
++		return;
++	}
++
++	/* read section headers */
++	Elf32_Shdr *section_headers;
++	section_headers = (Elf32_Shdr*)read_file_data(fd, file_header.e_shoff, file_header.e_shnum * sizeof(Elf32_Shdr), NULL);
++	if (section_headers == NULL)
++	{
++		close(fd);
++		hostio_error(own_buf);
++		return;
++	}
++
++	/* read string table */
++	char *string_table = read_file_data(fd, section_headers[file_header.e_shstrndx].sh_offset, section_headers[file_header.e_shstrndx].sh_size, NULL);
++	if (string_table == NULL)
++	{
++		close(fd);
++		free(section_headers);
++		hostio_error(own_buf);
++		return;
++	}
++
++	/* read the build id */
++	char *data = NULL;
++	int len = 0;
++	char *build_id = NULL;
++	for (size_t i = 0; i < file_header.e_shnum; ++i)
++	{
++		if (section_headers[i].sh_type == SHT_NOTE
++			&& section_headers[i].sh_name < section_headers[file_header.e_shstrndx].sh_size)
++		{
++			if (strcmp(".note.gnu.build-id", string_table + section_headers[i].sh_name) == 0)
++			{
++				data = read_file_data(fd, section_headers[i].sh_offset, section_headers[i].sh_size, NULL);
++				if (data != NULL)
++				{
++					Elf32_Nhdr *note_header = (Elf32_Nhdr*)data;
++					build_id = data + sizeof(Elf32_Nhdr) + note_header->n_namesz;
++					len = note_header->n_descsz;
++				}
++				break;
++			}
++		}
++	}
++	free(section_headers);
++	free(string_table);
++	close(fd);
++
++	if (build_id == NULL)
++	{
++		write_enn(own_buf);
++		return;
++	}
++
++	int bytes_sent = hostio_reply_with_data(own_buf, build_id, len, new_packet_len);
++	free(data);
++
++	/* If the response does not fit into a single packet, do not attempt
++	to return a partial response, but simply fail.  */
++	if (bytes_sent < len)
++		write_enn(own_buf);
++}
++
+ /* Handle all the 'F' file transfer packets.  */
+ 
+ int
+@@ -610,6 +751,8 @@ handle_vFile (char *own_buf, int packet_len, int *new_packet_len)
+     handle_readlink (own_buf, new_packet_len);
+   else if (startswith (own_buf, "vFile:setfs:"))
+     handle_setfs (own_buf);
++  else if (startswith (own_buf, "vFile:buildid:"))
++	  handle_buildid(own_buf, new_packet_len);
+   else
+     return 0;
+ 
+diff --git a/gdb/gdbserver/server.c b/gdb/gdbserver/server.c
+index 433af1f..ab34203 100644
+--- a/gdb/gdbserver/server.c
++++ b/gdb/gdbserver/server.c
+@@ -2349,6 +2349,8 @@ handle_query (char *own_buf, int packet_len, int *new_packet_len_p)
+ 
+       strcat (own_buf, ";no-resumed+");
+ 
++      strcat (own_buf, ";vFile:buildid+");
++
+       /* Reinitialize components as needed for the new connection.  */
+       hostio_handle_new_gdb_connection ();
+       target_handle_new_gdb_connection ();
+-- 
+2.7.4
+

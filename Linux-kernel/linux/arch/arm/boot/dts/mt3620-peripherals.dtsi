@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * MT3620 SoC
+ *
+ * Copyright (c) 2018 Microsoft Corporation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
+ * Place - Suite 330, Boston, MA 02111-1307 USA.
+ *
+ */
+
+#define GPIO        0
+#define UART        1
+#define I2C         2
+#define SPI_MASTER  3
+#define SPI_SLAVE   4
+#define CAN         5
+#define I2S         6
+#define PWM         7
+#define SDIO        8
+#define ETHERNET    9
+#define ADC         10
+#define DAC         11
+#define JTAG        12
+#define WIFI        13
+#define EINT        14
+
+#define UART_RX     0
+#define UART_TX     1
+#define UART_CTS    2
+#define UART_RTS    3
+#define UART_RI     4
+#define UART_DTR    5
+#define UART_DSR    6
+
+#define I2C_SCL     0
+#define I2C_SDA     1
+
+#define SPI_MOSI    0
+#define SPI_MISO    1
+#define SPI_SCK     2
+#define SPI_CS      3
+#define SPI_CS_B    4
+
+#define OWNER_NONE                      0x00
+#define OWNER_PLUTON                    0x01
+#define OWNER_SECURITY_MONITOR          0x02
+#define OWNER_NORMAL_WORLD_KERNEL       0x04
+#define OWNER_NORMAL_WORLD_USER         0x08
+#define OWNER_IO_0                      0x10
+#define OWNER_IO_1                      0x20
+
+#define PERIPHERAL_MAP_ENTRY(peripheral, instance, subfunction_start, subfunction_end, pin) \
+	((peripheral)|((instance)<<16)|(subfunction_start<<24))(((1<<(subfunction_end+1-subfunction_start))-1)|((pin)<<16))
+
+#define PERIPHERAL_ROUTING_ENTRY(peripheral, instance, owner) \
+	((peripheral)|((instance)<<16)|(owner<<24))

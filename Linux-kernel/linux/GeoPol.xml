@@ -1,0 +1,33 @@
+<!-- List of Include Files and folders and exception lists for this repo for GeoPolitical scanning. Contact Joerow for detail. -->
+<!-- This file is consumed by PowerShell scripts in the 'health-localization' repo under the LocBuild\GeoPolitical folder(s) -->
+
+<!DOCTYPE varsdefined [
+  <!ENTITY GitReposFolder "C:\GITs\Repos">
+  <!ENTITY GitRepoName "ext-linux">
+]>
+
+<GeoPol_Folders>
+<!-- List of Folders to include for GeoPolitical scanning -->
+<SourceGitFolder>&GitReposFolder;\&GitRepoName;</SourceGitFolder>
+<GitRepoName>&GitRepoName;</GitRepoName>
+
+  <Component Include="List here folders to Include in a GeoPol Scan">    
+    <IncludeFolder>security\azure_sphere</IncludeFolder>
+    <IncludeFolder>include\azure_sphere</IncludeFolder>
+    <IncludeFolder>fs\asxipfs</IncludeFolder>
+    <IncludeFolder>drivers\platform\azure_sphere</IncludeFolder>
+    <IncludeFolder>drivers\mtd\chips\exp*.*</IncludeFolder>
+    <IncludeFolder>include\uapi\linux\exp*.*</IncludeFolder>
+    <IncludeFolder>Documentation\filesystems\exp*.*</IncludeFolder>
+    <IncludeFolder>include\mt3620</IncludeFolder>
+    <IncludeFolder>drivers\net\wireless\mt3620</IncludeFolder>
+    <IncludeFolder>drivers\mt3620hif</IncludeFolder>
+    <IncludeFolder>drivers\pinctrl\mediatek\*mt3620*.*</IncludeFolder>
+    <IncludeFolder>drivers\dma\*mtk3620*.*</IncludeFolder>
+    <IncludeFolder>arch\arm\boot\dts\*mt362*.*</IncludeFolder>
+    <IncludeFolder>drivers\mailbox\*mt3620*.*</IncludeFolder>
+    <IncludeFolder>drivers\char\hw_random\*mt3620*.*</IncludeFolder>
+  </Component>
+    <Component Exclude="List exceptions here to not be scanned, that have been included above">    
+  </Component>
+</GeoPol_Folders>

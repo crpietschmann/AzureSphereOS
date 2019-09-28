@@ -1,0 +1,33 @@
+Patch the emergency arena size to zero to reduce static memory usage.  The OOM killer
+usage on Azure Sphere will cause the app in question to be killed before this code path
+gets invoked anyway and it saves ~30KB of static allocation.
+
+diff --git a/libstdc++-v3/libsupc++/eh_alloc.cc b/libstdc++-v3/libsupc++/eh_alloc.cc
+index d362e40..a197248 100644
+--- a/libstdc++-v3/libsupc++/eh_alloc.cc
++++ b/libstdc++-v3/libsupc++/eh_alloc.cc
+@@ -116,24 +116,8 @@ namespace
+ 
+   pool::pool()
+     {
+-      // Allocate the arena - we could add a GLIBCXX_EH_ARENA_SIZE environment
+-      // to make this tunable.
+-      arena_size = (EMERGENCY_OBJ_SIZE * EMERGENCY_OBJ_COUNT
+-		    + EMERGENCY_OBJ_COUNT * sizeof (__cxa_dependent_exception));
+-      arena = (char *)malloc (arena_size);
+-      if (!arena)
+-	{
+-	  // If the allocation failed go without an emergency pool.
+ 	  arena_size = 0;
+ 	  first_free_entry = NULL;
+-	  return;
+-	}
+-
+-      // Populate the free-list with a single entry covering the whole arena
+-      first_free_entry = reinterpret_cast <free_entry *> (arena);
+-      new (first_free_entry) free_entry;
+-      first_free_entry->size = arena_size;
+-      first_free_entry->next = NULL;
+     }
+ 
+   void *pool::allocate (std::size_t size)

@@ -1,0 +1,20 @@
+menuconfig ARCH_MT3620
+   bool "MT3620 family" if ARCH_MULTI_V7
+   select ARCH_WANT_OPTIONAL_GPIOLIB
+   select ARM_AMBA
+   select ARM_GIC
+   select POWER_RESET
+   select POWER_RESET_MT362X
+   select CONFIG_ARCH_MTD_XIP
+   select ARCH_MEDIATEK
+   help
+     This option enables support for systems using MT3620.
+
+     You must boot using a Flattened Device Tree in order to use these
+     platforms. The traditional (ATAGs) boot method is not usable on
+     these boards with this option.
+
+if ARCH_MT3620
+
+
+endif

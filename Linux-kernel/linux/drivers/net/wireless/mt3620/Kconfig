@@ -1,0 +1,17 @@
+menuconfig MT3620_WIFI
+	tristate "MT3620 Wireless LAN support"
+    depends on CFG80211
+	---help---
+	  Wireless driver for the MT3620 SoC
+
+menuconfig MT3620_WIFI_DEBUG
+	bool "MT3620 Wi-Fi debug logging"
+	depends on MT3620_WIFI
+	help
+	  Debug logging for MT3620 Wi-Fi driver
+
+menuconfig MT3620_WIFI_PACKET_DEBUG
+	bool "MT3620 Wi-Fi packet debug logging"
+	depends on MT3620_WIFI_DEBUG
+	help
+		Debug logging for packets comming into MT3620 Wi-Fi driver

@@ -1,0 +1,66 @@
+#
+# scc v0.8
+# processed: Tue Nov 13 02:03:37 UTC 2018
+#
+# This is a scc output file, do not edit
+#
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-exp23/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/defconfig # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/exp23.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/crypto.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/net.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/xip.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/powermgmt.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/peripherals.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/slip.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/cgroups.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/security.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/vtconsole.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/memory.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/blockdev.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/exp23-sk.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/logging.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/compression.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/fs.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/prod_debug_settings.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/netfilter.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/reset.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/arch.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/addrmap.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/mailbox.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/uart.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/gpio.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/wifi.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/reset.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/dma.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/spi.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/rtc.cfg # non-hardware

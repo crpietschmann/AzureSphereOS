@@ -1,0 +1,15 @@
+root:*:0:
+sys:*:2:
+mail:*:4:
+gpio:*:5:
+www-data-cert:*:6:
+appman:*:7:
+app-ipc:*:8:
+net-adm:*:9:
+wifi-config:*:10:
+net-restricted:*:11:
+sys-log:*:12:
+tmp-admin:*:13:
+rtc:*:14:
+net-config:*:15:
+nogroup:*:999:

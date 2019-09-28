@@ -1,0 +1,35 @@
+From 0043b8832765a146528b4b5660f6082754dba25c Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Mon, 11 Dec 2017 13:34:59 -0800
+Subject: [PATCH 3/3] Only fetch values for children actually requested
+
+---
+ gdb/varobj.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/gdb/varobj.c b/gdb/varobj.c
+index 6e8f189..73a3749 100644
+--- a/gdb/varobj.c
++++ b/gdb/varobj.c
+@@ -895,7 +895,9 @@ varobj_list_children (struct varobj *var, int *from, int *to)
+   while (VEC_length (varobj_p, var->children) < var->num_children)
+     VEC_safe_push (varobj_p, var->children, NULL);
+ 
+-  for (i = 0; i < var->num_children; i++)
++  varobj_restrict_range(var->children, from, to);
++
++  for (i = *from; i < *to; i++)
+     {
+       varobj_p existing = VEC_index (varobj_p, var->children, i);
+ 
+@@ -910,7 +912,6 @@ varobj_list_children (struct varobj *var, int *from, int *to)
+ 	}
+     }
+ 
+-  varobj_restrict_range (var->children, from, to);
+   return var->children;
+ }
+ 
+-- 
+2.7.4
+

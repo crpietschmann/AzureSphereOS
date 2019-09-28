@@ -1,0 +1,81 @@
+From cb541521b76a4cccfa22056e5cb01d4bf60c7aa9 Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Fri, 19 Jan 2018 12:22:13 -0800
+Subject: [PATCH] change register descriptions to read-only
+
+---
+ gdb/gdbserver/regcache.c | 2 +-
+ gdb/gdbserver/regcache.h | 2 +-
+ gdb/gdbserver/tdesc.c    | 2 +-
+ gdb/gdbserver/tdesc.h    | 2 +-
+ gdb/regformats/regdat.sh | 2 +-
+ 5 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/gdb/gdbserver/regcache.c b/gdb/gdbserver/regcache.c
+index 0f16f60..f5afe4d 100644
+--- a/gdb/gdbserver/regcache.c
++++ b/gdb/gdbserver/regcache.c
+@@ -265,7 +265,7 @@ find_regno (const struct target_desc *tdesc, const char *name)
+ 		  name);
+ }
+ 
+-struct reg *
++const struct reg *
+ find_register_by_number (const struct target_desc *tdesc, int n)
+ {
+   return &tdesc->reg_defs[n];
+diff --git a/gdb/gdbserver/regcache.h b/gdb/gdbserver/regcache.h
+index 309de41..cba8c7a 100644
+--- a/gdb/gdbserver/regcache.h
++++ b/gdb/gdbserver/regcache.h
+@@ -96,7 +96,7 @@ void regcache_write_pc (struct regcache *regcache, CORE_ADDR pc);
+ 
+ /* Return a pointer to the description of register ``n''.  */
+ 
+-struct reg *find_register_by_number (const struct target_desc *tdesc, int n);
++const struct reg *find_register_by_number (const struct target_desc *tdesc, int n);
+ 
+ int register_cache_size (const struct target_desc *tdesc);
+ 
+diff --git a/gdb/gdbserver/tdesc.c b/gdb/gdbserver/tdesc.c
+index fdd3519..abedc20 100644
+--- a/gdb/gdbserver/tdesc.c
++++ b/gdb/gdbserver/tdesc.c
+@@ -27,7 +27,7 @@ init_target_desc (struct target_desc *tdesc)
+   offset = 0;
+   for (i = 0; i < tdesc->num_registers; i++)
+     {
+-      tdesc->reg_defs[i].offset = offset;
++      gdb_assert(tdesc->reg_defs[i].offset == offset);
+       offset += tdesc->reg_defs[i].size;
+     }
+ 
+diff --git a/gdb/gdbserver/tdesc.h b/gdb/gdbserver/tdesc.h
+index ada879d..44d0e4e 100644
+--- a/gdb/gdbserver/tdesc.h
++++ b/gdb/gdbserver/tdesc.h
+@@ -27,7 +27,7 @@ struct target_desc
+ {
+   /* An array of NUM_REGISTERS elements of register definitions that
+      describe the inferior's register set.  */
+-  struct reg *reg_defs;
++  const struct reg *reg_defs;
+ 
+   /* The number of registers in inferior's register set (and thus in
+      the regcache).  */
+diff --git a/gdb/regformats/regdat.sh b/gdb/regformats/regdat.sh
+index 4c73352..a5ecf99 100755
+--- a/gdb/regformats/regdat.sh
++++ b/gdb/regformats/regdat.sh
+@@ -123,7 +123,7 @@ while do_read
+ do
+   if test "${type}" = "name"; then
+     name="${entry}"
+-    echo "static struct reg regs_${name}[] = {"
++    echo "static const struct reg regs_${name}[] = {"
+     continue
+   elif test "${type}" = "xmltarget"; then
+     xmltarget="${entry}"
+-- 
+2.7.4
+

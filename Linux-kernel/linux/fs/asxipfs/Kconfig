@@ -1,0 +1,11 @@
+config ASXIPFS
+	tristate "Azure Sphere XIP file system support (asxipfs)"
+	depends on BLOCK
+	help
+	  Saying Y here includes support for ASXipFs (Azure Sphere's XIP ROM File
+	  System).  
+
+	  See <file:Documentation/filesystems/asxipfs.txt> and
+	  <file:fs/asxipfs/README> for further information.
+
+	  If unsure, say N.

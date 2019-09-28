@@ -1,0 +1,6 @@
+config LITTLEFS
+	tristate "Little File System (littlefs) support"
+	depends on MTD
+	select QUOTACTL
+	help
+	  LittleFS is a flash file system designed for minimal RAM overhead

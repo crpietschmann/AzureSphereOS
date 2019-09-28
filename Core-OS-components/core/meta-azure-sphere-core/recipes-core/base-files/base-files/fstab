@@ -1,0 +1,2 @@
+# Placeholder to keep mount APIs happy
+/dev/root       /               auto       defaults                           1      1

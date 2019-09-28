@@ -1,0 +1,9 @@
+{
+    "SchemaVersion": 1,
+    "EntryPoint": "/bin/gdbserver",    
+    "Name" : "gdbserver",
+    "ComponentId" : "8548B129-B16F-4F84-8DBE-D2C847862E78",
+    "CmdArgs": [],
+    "Capabilities": {},
+    "ApplicationType": "Debugger"
+}

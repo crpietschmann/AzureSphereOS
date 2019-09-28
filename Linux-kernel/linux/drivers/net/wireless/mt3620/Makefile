@@ -1,0 +1,1 @@
+obj-$(CONFIG_MT3620_WIFI) += mt3620_wifi.o mt3620_wifi_common.o regulatory.o vendor.o

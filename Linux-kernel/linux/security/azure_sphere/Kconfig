@@ -1,0 +1,6 @@
+config SECURITY_AZURE_SPHERE
+	bool "Azure Sphere LSM support"
+	depends on SECURITY
+	default n
+	help
+	  This enables the Azure Sphere LSM.

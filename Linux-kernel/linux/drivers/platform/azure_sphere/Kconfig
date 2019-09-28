@@ -1,0 +1,44 @@
+menuconfig AZURE_SPHERE
+    bool "Azure Sphere platform support"
+    depends on ARM
+
+if AZURE_SPHERE
+
+config NULL_CONSOLE
+	bool "Null console device"
+	help
+	  Null console device that enables running without 
+	  serial or VT subsystems
+
+config AZURE_SPHERE_SECURITY_MONITOR
+	bool "Azure Sphere Security Monitor support"
+    depends on CPU_V7VE
+	help
+	  Security Monitor driver for Azure Sphere.
+
+config AZURE_SPHERE_SECURITY_MONITOR_DEBUG
+	bool "Azure Sphere Security Monitor debug output"
+	depends on AZURE_SPHERE_SECURITY_MONITOR
+	help
+	  Security Monitor driver debug output.
+
+config MT3620_PLUTON
+	tristate "MT3620 Pluton transport"
+	select MAILBOX
+	select MT3620_MAILBOX
+	depends on PLUTON_REMOTEAPI
+	help
+		MT3620 Pluton RemoteAPI support
+
+config PLUTON_REMOTEAPI
+	tristate "Pluton RemoteAPI support"
+	help
+	  Support for communicating with Pluton
+
+config PLUTON_REMOTEAPI_DEBUG
+	bool "Pluton RemoteAPI debug logging"
+	depends on PLUTON_REMOTEAPI
+	help
+	  Debug logging for Pluton RemoteAPI driver
+
+endif # AZURE_SPHERE

@@ -1,0 +1,2 @@
+obj-$(CONFIG_SECURITY_AZURE_SPHERE) := lsm.o
+

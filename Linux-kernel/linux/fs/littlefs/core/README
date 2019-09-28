@@ -1,0 +1,8 @@
+This is LittleFS code based on upstream commit c8323112ee535088eb77ab04bfb8a4bb2fe77e30.
+
+The following changes were made:
+
+1.) Adjust #includes to match Linux file names
+2.) Fix for loop usage for C89 compliance
+3.) Provide malloc / free wrappers in lfs_util.h
+4.) Disable a number of features like asserts and logging via lfs_util.h #defines

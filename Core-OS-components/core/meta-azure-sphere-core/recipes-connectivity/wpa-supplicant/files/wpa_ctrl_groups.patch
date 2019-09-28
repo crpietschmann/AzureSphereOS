@@ -1,0 +1,79 @@
+Patch for Azure Sphere to enable setting a specific group on WPA ctrl sockets
+
+diff -Naur wpa_supplicant-2.6.orig/src/common/wpa_ctrl.c wpa_supplicant-2.6.changed/src/common/wpa_ctrl.c
+--- wpa_supplicant-2.6.orig/src/common/wpa_ctrl.c	2017-04-26 13:03:13.926309537 -0700
++++ wpa_supplicant-2.6.changed/src/common/wpa_ctrl.c	2017-04-26 13:08:07.838309537 -0700
+@@ -14,6 +14,8 @@
+ #include <sys/un.h>
+ #include <unistd.h>
+ #include <fcntl.h>
++#include <sys/types.h>
++#include <grp.h>
+ #endif /* CONFIG_CTRL_IFACE_UNIX */
+ #ifdef CONFIG_CTRL_IFACE_UDP_REMOTE
+ #include <netdb.h>
+@@ -88,10 +90,17 @@
+ 	return wpa_ctrl_open2(ctrl_path, NULL);
+ }
+ 
+-
+ struct wpa_ctrl * wpa_ctrl_open2(const char *ctrl_path,
+ 				 const char *cli_path)
+ {
++	// We default to net-adm
++	return wpa_ctrl_open3(ctrl_path, cli_path, "net-adm");
++}
++
++struct wpa_ctrl * wpa_ctrl_open3(const char *ctrl_path,
++				 const char *cli_path,
++				 const char *group_name)
++{
+ 	struct wpa_ctrl *ctrl;
+ 	static int counter = 0;
+ 	int ret;
+@@ -150,6 +159,20 @@
+ 		return NULL;
+ 	}
+ 
++	// If specified, set the group info
++	if (group_name) {
++		struct group *group_info;
++
++		group_info = getgrnam(group_name);
++		if (group_info == NULL) {
++			perror("getgrnam could not find group");
++			/* Not fatal, continue on.*/
++		} else {
++			chmod(ctrl->local.sun_path, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
++			chown(ctrl->local.sun_path, -1, group_info->gr_gid);
++		}
++	}
++
+ #ifdef ANDROID
+ 	chmod(ctrl->local.sun_path, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+ 	/* Set group even if we do not have privileges to change owner */
+diff -Naur wpa_supplicant-2.6.orig/src/common/wpa_ctrl.h wpa_supplicant-2.6.changed/src/common/wpa_ctrl.h
+--- wpa_supplicant-2.6.orig/src/common/wpa_ctrl.h	2017-04-26 13:03:30.978309537 -0700
++++ wpa_supplicant-2.6.changed/src/common/wpa_ctrl.h	2017-04-26 13:05:32.786309537 -0700
+@@ -364,6 +364,21 @@
+  */
+ struct wpa_ctrl * wpa_ctrl_open2(const char *ctrl_path, const char *cli_path);
+ 
++/**
++ * wpa_ctrl_open3 - Open a control interface to wpa_supplicant/hostapd
++ * @ctrl_path: Path for UNIX domain sockets; ignored if UDP sockets are used.
++ * @cli_path: Path for client UNIX domain sockets; ignored if UDP socket
++ *            is used.
++ * @group_name: Name of group to use for access control in restrict access scenarios
++ * Returns: Pointer to abstract control interface data or %NULL on failure
++ *
++ * This function is used to open a control interface to wpa_supplicant/hostapd
++ * when the socket path for client need to be specified explicitly. Default
++ * ctrl_path is usually /var/run/wpa_supplicant or /var/run/hostapd and client
++ * socket path is /tmp.
++ */
++struct wpa_ctrl * wpa_ctrl_open3(const char *ctrl_path,
++				 const char *cli_path, const char *group_name);
+ 
+ /**
+  * wpa_ctrl_close - Close a control interface to wpa_supplicant/hostapd
