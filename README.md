@@ -5,9 +5,10 @@ This repository contains the GPL licensed source code for the open source Azure 
 This repository contains a few different folders for the different open source downloads for the various components of the Azure Sphere Operating System:
 
 - [Core OS components](/Core-OS-components)
-- [GPL Sources](/GPL-Sources)
 - [Linux kernel](Linux-kernel)
 - [TAP](/TAP)
+
+Version in this Repo: **Azure Sphere OS 18.11**
 
 This is not the official repository for the source code, and is not affiliated with Microsoft. If you're looking to download the open source source code for the Azure Sphere OS (Operating System), then you'll need to go to <https://3rdpartysource.microsoft.com/>, search for "Azure Sphere" and download it from there. This repository is only meant for learning and discovery purposes.
 
