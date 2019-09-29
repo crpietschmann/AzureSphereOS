@@ -80,4 +80,5 @@ ifneq ($(CONFIG_NET_L3_MASTER_DEV),)
 obj-y				+= l3mdev/
 endif
 obj-$(CONFIG_QRTR)		+= qrtr/
+obj-$(CONFIG_AZSPIO)		+= azspio/
 obj-$(CONFIG_NET_NCSI)		+= ncsi/

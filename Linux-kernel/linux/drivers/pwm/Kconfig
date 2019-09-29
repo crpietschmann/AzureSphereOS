@@ -32,6 +32,9 @@ config PWM_SYSFS
 	bool
 	default y if SYSFS
 
+config PWM_CHARDEV
+	bool "PWM character device interface"
+
 config PWM_AB8500
 	tristate "AB8500 PWM support"
 	depends on AB8500_CORE && ARCH_U8500
@@ -270,6 +273,14 @@ config PWM_MESON
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called pwm-meson.
+
+config PWM_MT3620
+	tristate "Mediatek MT3620 PWM driver"
+	depends on ARCH_MT3620
+	help
+	  This selects the Mediatek(R) MT3620 PWM driver.
+
+	  If you want to use Mediatek(R) PWM interface, select Y or M here.
 
 config PWM_MTK_DISP
 	tristate "MediaTek display PWM driver"

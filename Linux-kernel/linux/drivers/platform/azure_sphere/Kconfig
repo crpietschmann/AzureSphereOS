@@ -41,4 +41,20 @@ config PLUTON_REMOTEAPI_DEBUG
 	help
 	  Debug logging for Pluton RemoteAPI driver
 
+config AZURE_SPHERE_ASLR_PMD_ALIGN
+	bool "Align ASLR to L2 page middle directory"
+	help
+		Modify ASLR to align to L2 page middle directory to save on memory footprint
+
+config AZURE_SPHERE_IO_CORE_COMM
+	tristate "Azure Sphere IO Core Communication
+	depends on AZSPIO
+	help
+	  Support for communicating with IO Cores
+
+config AZURE_SPHERE_RESET
+	bool "AZSPHERE power-off and reset driver"
+	help
+	  Power off and reset support for AZSPHERE. 
+
 endif # AZURE_SPHERE

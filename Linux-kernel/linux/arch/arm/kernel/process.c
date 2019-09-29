@@ -7,6 +7,12 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * Modifications:
+ * - Microsoft Mar 2019 - Change brk value to exist after stack for heap
+ *   allocation for page middle directories
+ * - Microsoft Mar 2019 - Modify load location of sigpage to be immediately
+ *   before the stack for page middle directories
  */
 #include <stdarg.h>
 
@@ -316,10 +322,38 @@ unsigned long get_wchan(struct task_struct *p)
 	return 0;
 }
 
-unsigned long arch_randomize_brk(struct mm_struct *mm)
+#ifdef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
+unsigned long arch_randomize_brk_with_stack(struct mm_struct *mm,
+		unsigned long start_stack)
 {
+	//put the brk entry a page after the top of stack, this should
+	//force heap to that location
+	struct vm_area_struct *vma = mm->mmap;
+
+	//mm does not provide the size of the stack, go look up each VMA
+	//entry to find which VMA the stack falls into. vm_start and
+	//vm_end will then indicate the currently mapped range for
+	//the stack.
+	while (vma) {
+		if (vma->vm_start <= start_stack &&
+		vma->vm_end > start_stack) {
+			//return a location 1 page past the end of the stack
+			//allocated area for the heap
+			return vma->vm_end + (1 << PAGE_SHIFT);
+		}
+		vma = vma->vm_next;
+	};
+
+	//return the default although we should never get here
 	return randomize_page(mm->brk, 0x02000000);
 }
+#else
+unsigned long arch_randomize_brk(struct mm_struct *mm)
+{
+	//return the default although we should never get here
+	return randomize_page(mm->brk, 0x02000000);
+}
+#endif
 
 #ifdef CONFIG_MMU
 #ifdef CONFIG_KUSER_HELPERS
@@ -376,6 +410,32 @@ static unsigned long sigpage_addr(const struct mm_struct *mm,
 	unsigned long last;
 	unsigned long addr;
 	unsigned int slots;
+
+#ifdef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
+	//stack randomization was modified to guarantee it won't sit at the
+	//beginning of the page, put the sigpage right before it with a
+	//single page gap between for safety
+	struct vm_area_struct *vma = mm->mmap;
+
+	npages += 2;
+
+	//mm does not provide the size of the stack, go look up each VMA
+	//entry to find which VMA the stack falls into. vm_start and vm_end
+	//will then indicate the currently mapped range for the stack.
+	while (vma) {
+		if (vma->vm_start <= vma->vm_mm->start_stack &&
+		vma->vm_end > vma->vm_mm->start_stack) {
+			//return a location prior to the start of the stack that
+			//accounts for the proper number of pages, because we only
+			//map sigpage it should only be 1 page worth
+			return vma->vm_start - (npages << PAGE_SHIFT);
+		}
+		vma = vma->vm_next;
+	};
+
+	//find a random spot although we should never get here
+	return 0;
+#endif
 
 	first = PAGE_ALIGN(mm->start_stack);
 

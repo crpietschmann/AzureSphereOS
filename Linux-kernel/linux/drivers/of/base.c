@@ -595,6 +595,126 @@ bool of_device_is_available(const struct device_node *device)
 EXPORT_SYMBOL(of_device_is_available);
 
 /**
+ *  of_device_set_available - update a device's availability for use
+ *
+ *  @device: Node for device to update availability on
+ *
+ *  This routine returns 0 on success, <0 on failure.
+ */
+int of_device_set_available(struct device_node *node, bool available)
+{
+	unsigned long flags;
+	bool freeprop, havedtlock, havemutex, prevstate;
+	struct property *prop, *oldprop, **nextprop;
+	int ret;
+	const char *newname = "status";
+	const char *newvalue = available ? "okay" : "disabled";
+	const size_t newvaluelen = strlen(newvalue);
+
+	ret = 0;
+	freeprop = havedtlock = havemutex = false;
+
+	mutex_lock(&of_mutex);
+	havemutex = true;
+
+	raw_spin_lock_irqsave(&devtree_lock, flags);
+	havedtlock = true;
+
+	/* First check if the device is already marked available; if it is, then
+	 * there's no work needed here. */
+	prevstate = __of_device_is_available(node);
+	if (prevstate == !!available)
+		goto out;
+
+	/* Now look for a dead property that already has the desired value. */
+	prop = NULL;
+	for (nextprop = &node->deadprops; *nextprop != NULL; nextprop = &((*nextprop)->next)) {
+		prop = *nextprop;
+		if (of_prop_cmp(prop->name, newname) == 0 &&
+		    prop->length == newvaluelen &&
+		    memcmp(prop->value, newvalue, newvaluelen) == 0) {
+
+			*nextprop = prop->next;
+			break;
+		}
+
+		prop = NULL;
+	}
+
+	/* If we didn't find one, then allocate one. */
+	if (prop == NULL) {
+		prop = kzalloc(sizeof(*prop), GFP_KERNEL);
+		if (prop == NULL) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		freeprop = true;
+
+		prop->name = kstrdup(newname, GFP_KERNEL);
+		prop->value = kstrdup(newvalue, GFP_KERNEL);
+
+		if (!prop->name || !prop->value) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		prop->length = strlen(newvalue) + 1;
+
+		of_property_set_flag(prop, OF_DYNAMIC);
+	}
+
+	/* Now update  the property. */
+	ret = __of_update_property(node, prop, &oldprop);
+	if (ret)
+		goto out;
+
+	freeprop = false;
+
+	raw_spin_unlock_irqrestore(&devtree_lock, flags);
+	havedtlock = false;
+
+	__of_update_property_sysfs(node, prop, oldprop);
+
+	mutex_unlock(&of_mutex);
+	havemutex = false;
+
+	ret = of_property_notify(OF_RECONFIG_UPDATE_PROPERTY, node, prop, oldprop);
+	if (ret) {
+		/* At this point, the update has been committed, but there's
+		 * a risk that notifications haven't been sent everywhere.
+		 * But there's also a risk that reverting the change will also
+		 * fail. With no great option, we proceed forward and report
+		 * failure, but leave the tree updated. This is the same
+		 * behavior as of_update_property().
+		 */
+		goto out;
+	}
+
+	ret = 0;
+
+out:
+	if (havedtlock)
+		raw_spin_unlock_irqrestore(&devtree_lock, flags);
+
+	if (havemutex)
+		mutex_unlock(&of_mutex);
+
+	if (freeprop && prop) {
+		if (prop->name)
+			kfree(prop->name);
+
+		if (prop->value)
+			kfree(prop->value);
+
+		kfree(prop);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(of_device_set_available);
+
+/**
  *  of_device_is_big_endian - check if a device has BE registers
  *
  *  @device: Node to check for endianness
@@ -737,6 +857,31 @@ struct device_node *of_get_next_available_child(const struct device_node *node,
 	return next;
 }
 EXPORT_SYMBOL(of_get_next_available_child);
+
+/**
+ * of_get_compatible_child - Find compatible child node
+ * @parent:	parent node
+ * @compatible:	compatible string
+ *
+ * Lookup child node whose compatible property contains the given compatible
+ * string.
+ *
+ * Returns a node pointer with refcount incremented, use of_node_put() on it
+ * when done; or NULL if not found.
+ */
+struct device_node *of_get_compatible_child(const struct device_node *parent,
+				const char *compatible)
+{
+	struct device_node *child;
+
+	for_each_child_of_node(parent, child) {
+		if (of_device_is_compatible(child, compatible))
+			break;
+	}
+
+	return child;
+}
+EXPORT_SYMBOL(of_get_compatible_child);
 
 /**
  *	of_get_child_by_name - Find the child node by name for a given parent

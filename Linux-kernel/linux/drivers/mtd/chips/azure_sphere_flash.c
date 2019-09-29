@@ -199,7 +199,7 @@ static int azure_sphere_flash_write(struct mtd_info *mtd, loff_t to, size_t len,
 		result = azure_sphere_sm_write_flash(to32, chunk_len, cursor);
 		if (result < 0) {
 			printk(KERN_ERR "%s: write failed: %#x\n", __func__, result);
-			return result;
+			return -EIO;
 		}
 
 		to32 += chunk_len;
@@ -248,7 +248,8 @@ static int azure_sphere_flash_erase(struct mtd_info *mtd, struct erase_info *ins
 		instr->state = MTD_ERASE_DONE;
 	} else {
 		printk(KERN_ERR "%s: erase failed: %#x\n", __func__, result);
-		instr->state = MTD_ERASE_FAILED;	
+		instr->state = MTD_ERASE_FAILED;
+		result = -EIO;	
 	}
 	
 	mtd_erase_callback(instr);

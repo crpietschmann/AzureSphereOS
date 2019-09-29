@@ -654,6 +654,15 @@ config I2C_MPC
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-mpc.
 
+config I2C_MT3620
+	tristate "MediaTek 3620 I2C adapter"
+	default y
+	help
+	  This selects the MediaTek(R) Integrated Inter Circuit bus driver
+	  for MT3620.
+	  If you want to use MediaTek(R) I2C interface, say Y or M here.
+	  If unsure, say N.
+
 config I2C_MT65XX
 	tristate "MediaTek I2C adapter"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

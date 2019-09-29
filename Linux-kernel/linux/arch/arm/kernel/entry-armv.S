@@ -35,6 +35,8 @@
 #include <asm/entry-macro-multi.S>
 #include <asm/probes.h>
 
+	declare_cfi_section
+
 /*
  * Interrupt handling.
  */
@@ -152,6 +154,7 @@ ENDPROC(__und_invalid)
 	.macro	svc_entry, stack_hole=0, trace=1, uaccess=1
  UNWIND(.fnstart		)
  UNWIND(.save {r0 - pc}		)
+	cfi_mark_svc_regs
 	sub	sp, sp, #(SVC_REGS_SIZE + \stack_hole - 4)
 #ifdef CONFIG_THUMB2_KERNEL
  SPFIX(	str	r0, [sp]	)	@ temporarily saved
@@ -382,6 +385,7 @@ ENDPROC(__fiq_abt)
 	.macro	usr_entry, trace=1, uaccess=1
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)	@ don't unwind the user space
+	cfi_mark_user_regs offset = 0
 	sub	sp, sp, #PT_REGS_SIZE
  ARM(	stmib	sp, {r1 - r12}	)
  THUMB(	stmia	sp, {r0 - r12}	)
@@ -454,6 +458,7 @@ __dabt_usr:
 	mov	r2, sp
 	dabt_helper
 	b	ret_from_exception
+	cfi_end_user_regs
  UNWIND(.fnend		)
 ENDPROC(__dabt_usr)
 
@@ -465,6 +470,7 @@ __irq_usr:
 	get_thread_info tsk
 	mov	why, #0
 	b	ret_to_user_from_irq
+	cfi_end_user_regs
  UNWIND(.fnend		)
 ENDPROC(__irq_usr)
 
@@ -739,6 +745,7 @@ __und_usr_fault_16:
 1:	mov	r0, sp
 	badr	lr, ret_from_exception
 	b	__und_fault
+	cfi_end_user_regs
 ENDPROC(__und_usr_fault_32)
 ENDPROC(__und_usr_fault_16)
 
@@ -758,6 +765,7 @@ ENTRY(ret_from_exception)
 	get_thread_info tsk
 	mov	why, #0
 	b	ret_to_user
+	cfi_end_user_regs
  UNWIND(.fnend		)
 ENDPROC(__pabt_usr)
 ENDPROC(ret_from_exception)
@@ -770,6 +778,7 @@ __fiq_usr:
 	bl	handle_fiq_as_nmi
 	get_thread_info tsk
 	restore_user_regs fast = 0, offset = 0
+	cfi_end_user_regs
  UNWIND(.fnend		)
 ENDPROC(__fiq_usr)
 

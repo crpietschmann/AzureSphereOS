@@ -34,35 +34,49 @@
 
 #include "mt3620_wifi_common.h"
 
-// Disconnects from Wi-Fi if currently connected
-void mt3620_wifi_disconnect_if_connected(struct mt3620_wifi_vif *vif)
+// Disconnects Wi-Fi upper layer if currently connected or if forcing a disconnect
+void mt3620_wifi_disconnect_cfg80211(struct mt3620_wifi_vif *vif, bool force_disconnect)
 {
-	if (vif->port == WIFI_PORT_AP) {
-		// No-op on AP mode
-		return;
-	}
+    struct mt3620_wifi_hw *wifi_hw = wiphy_priv(vif->wdev.wiphy);
 
-	if (vif->state != CONNECTED) {
-		// Only disconnect if currently connected
-		return;
-	}
+    if (vif->port == WIFI_PORT_AP) {
+        // No-op on AP mode
+        return;
+    }
 
-	// Send disconnect event
-	netif_stop_queue(vif->ndev);
+    if (vif->state == DISCONNECTED) {
+        return;
+    }
 
-	dev_info(g_wifi_hw->wifi->dev, "WiFi disconnecting (2) from '%.*s' network in channel %d",
-		vif->mode_data.sta.ssid_len, vif->mode_data.sta.ssid, vif->channel);
-	cfg80211_disconnected(vif->ndev, 0, NULL, 0, false, GFP_KERNEL);
-	if (g_wifi_hw->ibss_start) {
-		g_wifi_hw->ibss_start = false;
-	}
-	vif->state = DISCONNECTED;
+    // Force disconnect is used in cases where the N9 firmware layer could be in
+    // an inconsistent state with the upper layer wi-fi software (like error condtions
+    // or partial connections -- association succeeds but connection ends up failing).
+    if (!force_disconnect) {
+        // return if we are connecting unless it is a force disconnect 
+        if (vif->state == CONNECTING) {
+            dev_info(wifi_hw->wifi->dev, "WiFi - ignoring disconnect while connecting");
+            return;
+        }
+    }
 
-	// Blank out BSSID / QoS
-	memset(vif->mode_data.sta.bssid, 0, ETH_ALEN);
-	vif->mode_data.sta.qos = false;
+    // Send disconnect event
+    netif_stop_queue(vif->ndev);
 
-	netif_carrier_off(vif->ndev);
+    dev_info(wifi_hw->wifi->dev, "WiFi cfg80211 disconnecting from '%.*s' network in channel %d, bssid: %pM, force: %d",
+        vif->mode_data.sta.ssid_len, vif->mode_data.sta.ssid, vif->channel, vif->mode_data.sta.bssid, force_disconnect ? 1 : 0);
+
+    cfg80211_disconnected(vif->ndev, 0, NULL, 0, false, GFP_KERNEL);
+    if (wifi_hw->ibss_start) {
+        wifi_hw->ibss_start = false;
+    }
+
+    vif->state = DISCONNECTED;
+
+    // Blank out BSSID / QoS
+    memset(vif->mode_data.sta.bssid, 0, ETH_ALEN);
+    vif->mode_data.sta.qos = false;
+
+    netif_carrier_off(vif->ndev);
 }
 
 ///
@@ -74,17 +88,17 @@ void mt3620_wifi_disconnect_if_connected(struct mt3620_wifi_vif *vif)
 /// @returns - 0 on success
 
 int mt3620_wifi_set_mac_helper(struct mt3620_wifi_hw *wifi_hw,
-			       struct mt3620_wifi_set_mac_addr *mac)
+                   struct mt3620_wifi_set_mac_addr *mac)
 {
-	int ret = SUCCESS;
+    int ret = SUCCESS;
 
-	if (mac == NULL) {
-		return -EINVAL;
-	}
+    if (mac == NULL) {
+        return -EINVAL;
+    }
 
-	ret = mt3620_hif_api_send_command_to_n9_sync(
-	    wifi_hw->wifi->hif_api_handle, WIFI_COMMAND_ID_IOT_OWN_MAC_ADDRESS,
-	    /* is set operation */ true, mac, sizeof(*mac), NULL, 0);
+    ret = mt3620_hif_api_send_command_to_n9_sync(
+        wifi_hw->wifi->hif_api_handle, WIFI_COMMAND_ID_IOT_OWN_MAC_ADDRESS,
+        /* is set operation */ true, mac, sizeof(*mac), NULL, 0);
 
-	return ret;
+    return ret;
 }

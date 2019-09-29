@@ -33,6 +33,7 @@
 #include <linux/arm-smccc.h>
 #include <asm/uaccess.h>
 #include <azure-sphere/security_monitor.h>
+#include <azure-sphere/security.h>
 #include <uapi/linux/azure-sphere/security_monitor.h>
 
 #include "security_monitor.h"
@@ -86,38 +87,10 @@ typedef struct _azure_sphere_sm_coherent_memory_params {
 } azure_sphere_sm_coherent_memory_params;
 
 ///
-/// Initializes the coherent memory parameter with a preallocated buffer of provided size.
-/// The coherency_params output parameter is used for converting a buffer into a cache coherent
-/// address for passing data between the normal world (NW) and the secure world (SW) via SMC calls.
-///
-/// @size               - The size of the provided buffer (in bytes)
-/// @memory_buffer      - The memory buffer that will be used to transfer data between SW and NW
-/// @coherency_params   - The output parameter that contains the coherency information for other
-//                        calls to azure_sphere_sm_coherent_memory_*.
-/// @returns            - Returns 0 if successfull; otherwise, returns a negative value
-static int azure_sphere_sm_coherent_memory_init_from_buffer(
-	size_t size, const void *memory_buffer,
-	azure_sphere_sm_coherent_memory_params *coherency_params)
-{
-	if (coherency_params == NULL || (memory_buffer == NULL && size > 0)) {
-		return -EINVAL;
-	}
-
-	coherency_params->size = size;
-	coherency_params->memory_buffer = memory_buffer;
-	coherency_params->coherent_memory_addr = DMA_ERROR_CODE; // Initialized in azure_sphere_sm_coherent_memory_map
-	coherency_params->owns_buffer = false;
-	coherency_params->is_dma_alloc = false;
-	coherency_params->is_initialized = true;
-
-	return 0;
-}
-
-///
-/// Allocates either a kernel buffer or a dma coherent buffer depending on the requested size. If 
+/// Allocates either a kernel buffer or a dma coherent buffer depending on the requested size. If
 /// the requested buffer size is less than a page, this function will use kzmalloc and map the coherent
-/// address, otherwise, it will use dma_alloc_coherent since its min size is one page. The output  
-/// parameter coherency_params can be used with other azure_sphere_sm_coherent_memory_* functions to 
+/// address, otherwise, it will use dma_alloc_coherent since its min size is one page. The output
+/// parameter coherency_params can be used with other azure_sphere_sm_coherent_memory_* functions to
 /// perform cache coherent transactions across the secure world boundary.
 ///
 /// @size               - The size of the provided buffer (in bytes).
@@ -146,7 +119,7 @@ static int azure_sphere_sm_coherent_memory_alloc(
 	/// Allocate using dma_alloc_coherent if the size of the buffer is bigger
 	/// than one page size. dma_alloc_coherent will allocate a minimum size of
 	/// one page, so for smaller objects use kzmalloc and use dma_map_single
-	/// to get the coherent memory address. 
+	/// to get the coherent memory address.
 	///
 	if (use_dma_alloc) {
 		alloc_buffer = dma_alloc_coherent(g_sm_dev, size, &dma_addr,
@@ -182,7 +155,7 @@ static int azure_sphere_sm_coherent_memory_alloc(
 
 ///
 /// For non-DMA allocated buffers, this function will map the cache coherent memory address for
-/// the buffer. After this call, the memory buffer must not be modified by NW until 
+/// the buffer. After this call, the memory buffer must not be modified by NW until
 /// azure_sphere_sm_coherent_memory_unmap is called. For DMA allocated buffers, this is a no-op.
 ///
 /// @coherency_params   - The parameter that contains the coherency information for the an
@@ -229,7 +202,7 @@ static void azure_sphere_sm_coherent_memory_unmap(
 		return;
 	}
 
-	if (!coherency_params->is_dma_alloc && 
+	if (!coherency_params->is_dma_alloc &&
 		coherency_params->coherent_memory_addr != DMA_ERROR_CODE) {
 
  		dma_unmap_single(g_sm_dev, coherency_params->coherent_memory_addr, coherency_params->size, DMA_FROM_DEVICE);
@@ -314,13 +287,13 @@ int azure_sphere_sm_query_flash(struct azure_sphere_sm_flash_info *flash_info)
 	dev_dbg(g_sm_dev,
 			"Security Monitor call: QUERY_FLASH returned %#x", err);
 
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
 	if (err != 0)
 		goto cleanup;
 
-	azure_sphere_sm_coherent_memory_unmap(&params);
-
 	/*
-	 * Minimally validate the data. Support compatibilty as long as the 
+	 * Minimally validate the data. Support compatibilty as long as the
 	 * size is at least big enough to fill in the appropriate flash
 	 * information. Do not use sizeof(security_monitor_query_flash_result) because
 	 * the structure may grown in the future and compatbility with the
@@ -399,6 +372,7 @@ int azure_sphere_sm_write_flash(u32 start_offset, u32 length, const void *data)
 {
 	int err;
 	struct arm_smccc_res res;
+	void *coherent_data;
 	azure_sphere_sm_coherent_memory_params params = {0};
 
 	dev_dbg(g_sm_dev, "Security Monitor call: WRITE_FLASH -->");
@@ -408,10 +382,12 @@ int azure_sphere_sm_write_flash(u32 start_offset, u32 length, const void *data)
 		return -EINVAL;
 	}
 
-	err = azure_sphere_sm_coherent_memory_init_from_buffer(length, data, &params);
+	err = azure_sphere_sm_coherent_memory_alloc(length, &params, (void**)&coherent_data);
 	if (err != 0) {
 		goto cleanup;
 	}
+
+	memcpy(coherent_data, data, length);
 
 	err = azure_sphere_sm_coherent_memory_map(&params);
 	if (err != 0) {
@@ -429,10 +405,6 @@ int azure_sphere_sm_write_flash(u32 start_offset, u32 length, const void *data)
 
 	dev_dbg(g_sm_dev,
 			"Security Monitor call: WRITE_FLASH returned %#x", err);
-
-	if (err != 0) {
-		goto cleanup;
-	}
 
 	azure_sphere_sm_coherent_memory_unmap(&params);
 
@@ -474,6 +446,13 @@ int azure_sphere_sm_generic_command_from_user(u32 cmd, void __user *input_param,
 	aligned_input_length = ALIGN(input_length, 4);
 	total_length = aligned_input_length + output_length;
 
+	// validate user-provided data is in bounds
+	if ((aligned_input_length < input_length) ||
+		(total_length < aligned_input_length)) {
+		err = -EINVAL;
+		goto cleanup;
+	}
+
 	if (total_length) {
 		err = azure_sphere_sm_coherent_memory_alloc(total_length, &params, (void**)&params_va);
 		if (err != 0) {
@@ -500,7 +479,7 @@ int azure_sphere_sm_generic_command_from_user(u32 cmd, void __user *input_param,
 		}
 	}
 
-	switch(cmd) 
+	switch(cmd)
  {
 	case AZURE_SPHERE_SMAPI_GET_APPLICATION_IMAGE_COUNT:
 		sm_smc_function = SECURITY_MONITOR_API_GET_APPLICATION_IMAGE_COUNT;
@@ -571,6 +550,9 @@ int azure_sphere_sm_generic_command_from_user(u32 cmd, void __user *input_param,
 	case AZURE_SPHERE_SMAPI_GET_MISSING_BASE_IMAGES_TO_DOWNLOAD:
 		sm_smc_function = SECURITY_MONITOR_API_GET_MISSING_BASE_IMAGES_TO_DOWNLOAD;
 		break;
+	case AZURE_SPHERE_SMAPI_GET_SOFTWARE_ROLLBACK_INFO:
+		sm_smc_function = SECURITY_MONITOR_API_GET_ROLLBACK_INFO;
+		break;
 	default:
 		dev_err(g_sm_dev,
 				"Invalid command: %d", cmd);
@@ -586,11 +568,11 @@ int azure_sphere_sm_generic_command_from_user(u32 cmd, void __user *input_param,
 		"Security Monitor call: %d returned %#x",
 		cmd, err);
 
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
 	if (err != 0) {
 		goto cleanup;
 	}
-
-	azure_sphere_sm_coherent_memory_unmap(&params);
 
 	if (output_length) {
 		err = copy_to_user(output_param, params_va + aligned_input_length, output_length);
@@ -667,10 +649,10 @@ int azure_sphere_sm_derive_key(void *client_uid, u32 generation_delta, void *key
 	dev_dbg(g_sm_dev,
 			"Security Monitor call: DERIVE_KEY returned %#x", err);
 
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
 	if (err != 0)
 		goto cleanup;
-
-	azure_sphere_sm_coherent_memory_unmap(&params);
 
 	memcpy(key, buffer->output_params.key, sizeof(buffer->output_params.key));
 	*instance = buffer->output_params.instance;
@@ -700,6 +682,8 @@ int azure_sphere_sm_reset(void)
 	return ret;
 }
 
+#define WRITE_LOG_MAX_LENGTH (8 * 1024)
+
 ///
 /// Write log data to security monitor log storage
 ///
@@ -717,6 +701,10 @@ int azure_sphere_sm_write_log_from_user(const void __user *log_data, u32 length)
 
 	if (length == 0) {
 		return -EINVAL;
+	}
+
+	if (length > WRITE_LOG_MAX_LENGTH) {
+		return -ENOMEM;
 	}
 
 	err = azure_sphere_sm_coherent_memory_alloc(length, &params, (void**)&params_va);
@@ -752,6 +740,8 @@ cleanup:
 
 EXPORT_SYMBOL_GPL(azure_sphere_sm_write_log_from_user);
 
+#define GET_LOG_DATA_MAX_LENGTH (8 * 1024)
+
 ///
 /// Get log data
 ///
@@ -769,8 +759,17 @@ int azure_sphere_sm_get_log_data(u32 storage_type, u32 offset, u32 length, void 
 
 	dev_dbg(g_sm_dev, "Security Monitor call: GET_LOG_DATA");
 
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_MANAGE_LOG_AND_TELEMETRY)) {
+		dev_err(g_sm_dev, "%s sender not allowed to manage log data\n", __FUNCTION__);
+		return -EPERM;
+	}
+
 	if (length == 0 || log_buffer == NULL) {
 		return -EINVAL;
+	}
+
+	if (length > GET_LOG_DATA_MAX_LENGTH) {
+		return -ENOMEM;
 	}
 
 	err = azure_sphere_sm_coherent_memory_alloc(length, &params, (void**)&params_va);
@@ -818,6 +817,11 @@ int azure_sphere_sm_get_log_data_size(u32 storage_type)
 	struct arm_smccc_res res;
 	dev_dbg(g_sm_dev, "Security Monitor call: GET_LOG_DATA_SIZE");
 
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_MANAGE_LOG_AND_TELEMETRY)) {
+		dev_err(g_sm_dev, "%s sender not allowed to manage log data\n", __FUNCTION__);
+		return -EPERM;
+	}
+
 	arm_smccc_smc(SECURITY_MONITOR_API_GET_LOG_DATA_SIZE, storage_type, 0, 0, 0, 0, 0, 0, &res);
 	err = res.a0;
 
@@ -849,7 +853,10 @@ int azure_sphere_sm_get_peripheral_count(uint16_t peripheral_type) {
 
 EXPORT_SYMBOL_GPL(azure_sphere_sm_get_peripheral_count);
 
-int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart_data, u32 length) {
+// Max 8KB
+#define MAX_LIST_PERIPHERALS_BUFFER_SIZE (8 * 1024)
+
+int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart_data, u32 length, u32 entry_length) {
 	int err;
 	struct arm_smccc_res res;
 	uint8_t *params_va = NULL;
@@ -858,7 +865,12 @@ int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart
 
 	u32 aligned_length = ALIGN(length, 4);
 
-	dev_dbg(g_sm_dev, "Security Monitor call: LIST_AVAILABLE_UARTS");
+	dev_dbg(g_sm_dev, "Security Monitor call: LIST_PERIPHERALS");
+
+	if (aligned_length > MAX_LIST_PERIPHERALS_BUFFER_SIZE) {
+		err = -ENOMEM;
+		goto cleanup;
+	}
 
 	if (aligned_length) {
 		err = azure_sphere_sm_coherent_memory_alloc(aligned_length, &params, (void**)&params_va);
@@ -874,7 +886,7 @@ int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart
 		params_addr = params.coherent_memory_addr;
 	}
 
-	arm_smccc_smc(SECURITY_MONITOR_API_LIST_PERIPHERALS, peripheral_type, params_addr, aligned_length, 0, 0, 0, 0, &res);
+	arm_smccc_smc(SECURITY_MONITOR_API_LIST_PERIPHERALS, peripheral_type, params_addr, aligned_length, entry_length, 0, 0, 0, &res);
 	err = res.a0;
 
 	dev_dbg(
@@ -882,11 +894,15 @@ int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart
 		"Security Monitor call: SECURITY_MONITOR_API_LIST_PERIPHERALS returned %#x",
 		err);
 
-	if (err != 0) {
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
+	// The SMC returns a negative value on error, and otherwise the number of entries filled out.
+	if (err < 0) {
 		goto cleanup;
 	}
 
-	azure_sphere_sm_coherent_memory_unmap(&params);
+        // We clobber the return value and return back 0, as that's what current clients are expecting.
+	err = 0;
 
 	if (length) {
 		err = copy_to_user(uart_data, params_va, length);
@@ -943,12 +959,12 @@ int azure_sphere_sm_get_n9_firmware_location(u32 *wifi_firmware_address, u32 *wi
 	dev_dbg(g_sm_dev, "Security Monitor call: SECURITY_MONITOR_API_GET_WIFI_FIRMWARE_LOCATION returned %#x",
 			err);
 
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
 	if (err != 0) {
 		dev_err(g_sm_dev, "Failed to find Wi-Fi firmware");
 		goto cleanup;
 	}
-
-	azure_sphere_sm_coherent_memory_unmap(&params);
 
 	*wifi_firmware_address = wifi_fw_args->output.wifi_firmware_address;
 	*wifi_firmware_length = wifi_fw_args->output.wifi_firmware_length;
@@ -1051,6 +1067,293 @@ cleanup:
 }
 
 EXPORT_SYMBOL_GPL(azure_sphere_set_rtc_alarm);
+
+///
+/// Controls an IO core
+///
+/// @action - Wether to start, stop or control debug of an IO Core
+/// @core_id - The IO Core instance to control
+/// @physical_address - The physical address of the executable to run (if this is a start request)
+/// @size - The size of the executable
+/// @flags - Debug flags (if this is a set_flags or start_core requst), type (for set communication buffer)
+/// @returns - 0 for success, non-zero for failure
+static int azure_sphere_io_core_control(enum security_monitor_io_core_control_action action, uint32_t core_id, uintptr_t physical_address, loff_t size, uint32_t flags)
+{
+	int err;
+	struct arm_smccc_res res;
+	struct security_monitor_io_core_control *buffer = NULL;
+	u32 input_addr = 0;
+	u32 output_addr = 0;
+	azure_sphere_sm_coherent_memory_params params = {0};
+	u32 length = sizeof(struct security_monitor_io_core_control);
+
+	dev_dbg(g_sm_dev, "Security Monitor call: IO_CORE_CONTROL");
+
+	err = azure_sphere_sm_coherent_memory_alloc(length, &params, (void**)&buffer);
+	if (err != 0) {
+		goto cleanup;
+	}
+
+	buffer->input_params.core_id = core_id;
+	buffer->input_params.action = action;
+	if (action == SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_START_CORE) {
+		buffer->input_params.start_core_params.address = physical_address;
+		buffer->input_params.start_core_params.size = size;
+		buffer->input_params.start_core_params.flags = flags;
+	} else if (action == SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_STOP_CORE) {
+		// no further arguments
+	} else if (action == SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_SET_FLAGS) {
+		buffer->input_params.set_flags_params.flags = flags;
+	} else if (action == SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_CONFIGURE_COMMUNICATION_BUFFER) {
+		buffer->input_params.configure_communication_buffer.type = flags;
+		buffer->input_params.configure_communication_buffer.address = physical_address;
+		buffer->input_params.configure_communication_buffer.size = size;
+	} else {
+		err = -EINVAL;
+		goto cleanup;
+	}
+
+	err = azure_sphere_sm_coherent_memory_map(&params);
+	if (err != 0) {
+		goto cleanup;
+	}
+
+	input_addr = params.coherent_memory_addr;
+	output_addr = input_addr + offsetof(struct security_monitor_derive_key_data, output_params);
+
+	/*
+	 * Call into the security monitor.
+	 */
+
+	arm_smccc_smc(SECURITY_MONITOR_API_IO_CORE_CONTROL, input_addr, sizeof(buffer->input_params), output_addr, sizeof(buffer->output_params), 0, 0, 0, &res);
+	err = res.a0;
+
+	dev_dbg(g_sm_dev,
+			"Security Monitor call: IO_CORE_CONTROL returned %#x", err);
+
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
+	if (err != 0)
+		goto cleanup;
+
+	err = buffer->output_params.result;
+cleanup:
+	azure_sphere_sm_coherent_memory_free(&params);
+	return err;
+}
+
+///
+/// Starts an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @physical_address - The physical address of the executable to run
+/// @size - The size of the executable
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_io_core_start(int core, uintptr_t physical_address, loff_t size, uint32_t flags)
+{
+	return azure_sphere_io_core_control(SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_START_CORE, core, physical_address, size, flags);
+}
+
+EXPORT_SYMBOL_GPL(azure_sphere_sm_io_core_start);
+
+///
+/// Stops an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_io_core_stop(int core)
+{
+	return azure_sphere_io_core_control(SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_STOP_CORE, core, 0, 0, 0);
+}
+
+EXPORT_SYMBOL_GPL(azure_sphere_sm_io_core_stop);
+
+///
+/// Sets debug flags of an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @flags - Debug flags (if this is a set_flags request)
+/// @returns - 0 for success, non-zero for failure
+///
+int azure_sphere_sm_io_core_set_flags(int core, uint32_t flags)
+{
+	return azure_sphere_io_core_control(SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_SET_FLAGS, core, 0, 0, flags);
+}
+
+EXPORT_SYMBOL_GPL(azure_sphere_sm_io_core_set_flags);
+
+#define RECORD_TELEMETRY_EVENT_DATA_MAX_LENGTH (8 * 1024)
+
+///
+/// Record a telemetry event
+///
+/// @id - Telemetry ID to record
+/// @event_timestamp - Time of the telemetry event
+/// @payload_length - Number of bytes of payload data.
+/// @payload - Payload data.  May be null if payload_length is 0
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_record_telemetry_event_data(uint16_t id, uint32_t event_timestamp, uint8_t payload_length, const void __user *payload)
+{
+	int err;
+	struct arm_smccc_res res;
+	uint8_t *params_va = NULL;
+	azure_sphere_sm_coherent_memory_params params = {0};
+
+	dev_dbg(g_sm_dev, "Security Monitor call: RECORD_TELEMETRY_EVENT_DATA");
+
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_RECORD_TELEMETRY)) {
+		dev_err(g_sm_dev, "%s sender not allowed to record telemetry\n", __FUNCTION__);
+		return -EPERM;
+	}
+
+	if (payload_length > RECORD_TELEMETRY_EVENT_DATA_MAX_LENGTH) {
+		return -ENOMEM;
+	}
+
+	if (payload_length) {
+		err = azure_sphere_sm_coherent_memory_alloc(payload_length, &params, (void**)&params_va);
+		if (err != 0) {
+			goto cleanup;
+		}
+
+		// let copy_from_user handle a null or invalid pointer
+		err = copy_from_user(params_va, payload, payload_length);
+		if (unlikely(err)) {
+			goto cleanup;
+		}
+
+		err = azure_sphere_sm_coherent_memory_map(&params);
+		if (err != 0) {
+			goto cleanup;
+		}
+	}
+	arm_smccc_smc(SECURITY_MONITOR_API_RECORD_TELEMETRY_EVENT_DATA, id, event_timestamp, payload_length, params.coherent_memory_addr, 0, 0, 0, &res);
+	err = res.a0;
+
+	dev_dbg(g_sm_dev,
+			"Security Monitor call: RECORD_TELEMETRY_EVENT_DATA returned %#x", err);
+
+cleanup:
+	azure_sphere_sm_coherent_memory_unmap(&params);
+	azure_sphere_sm_coherent_memory_free(&params);
+	return err;
+}
+
+EXPORT_SYMBOL_GPL(azure_sphere_sm_record_telemetry_event_data);
+
+#define GET_TELEMETRY_MAX_LENGTH (8 * 1024)
+
+///
+/// Get telemetry data
+///
+/// @offset - Offset into aggregate to begin copying.  Pass 0 to create the aggregate.
+/// @buffer - Buffer to store the aggregate in.  Should be exactly 4096.
+/// @buffer_size - Length of the output_buffer, in bytes.
+/// @returns - Length of data written to the output buffer, or <= 0 on failure
+int azure_sphere_sm_get_telemetry(uint16_t offset, void __user *buffer, uint16_t buffer_size)
+{
+	int err;
+	struct arm_smccc_res res;
+	uint8_t *params_va = NULL;
+	azure_sphere_sm_coherent_memory_params params = {0};
+
+	dev_dbg(g_sm_dev, "Security Monitor call: GET_TELEMETRY_DATA");
+
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_MANAGE_LOG_AND_TELEMETRY)) {
+		dev_err(g_sm_dev, "%s sender not allowed to manage telemetry\n", __FUNCTION__);
+		return -EPERM;
+	}
+
+	if (buffer_size == 0 || buffer == NULL) {
+		return -EINVAL;
+	}
+
+	if (buffer_size > GET_TELEMETRY_MAX_LENGTH) {
+		return -ENOMEM;
+	}
+
+	err = azure_sphere_sm_coherent_memory_alloc(buffer_size, &params, (void**)&params_va);
+	if (err != 0) {
+		goto cleanup;
+	}
+
+	err = azure_sphere_sm_coherent_memory_map(&params);
+	if (err != 0) {
+		goto cleanup;
+	}
+
+	arm_smccc_smc(SECURITY_MONITOR_API_GET_TELEMETRY_DATA, offset, (u32)params.coherent_memory_addr, buffer_size, 0, 0, 0, 0, &res);
+
+	dev_dbg(
+	    g_sm_dev,
+	    "Security Monitor call: GET_TELEMETRY_DATA returned %#x",
+	    (u32)res.a0);
+
+	azure_sphere_sm_coherent_memory_unmap(&params);
+
+    if (res.a0 != 0) {
+		err = copy_to_user(buffer, params_va, buffer_size);
+		if (unlikely(err)) {
+			goto cleanup;
+		}
+		err = res.a0; // Return the length returned from the monitor call
+	}
+
+cleanup:
+	azure_sphere_sm_coherent_memory_free(&params);
+
+	dev_dbg(g_sm_dev,
+			"Security Monitor call: GET_TELEMETRY_DATA returned %#x", err);
+
+	return err;
+}
+
+EXPORT_SYMBOL_GPL(azure_sphere_sm_get_telemetry);
+
+///
+/// Reset or retain telemetry data
+///
+/// @retain - true to retain, false to reset
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_reset_retain_telemetry(bool retain)
+{
+	int err;
+	struct arm_smccc_res res;
+	u32 sm_smc_function = 0;
+
+	dev_dbg(g_sm_dev, "Security Monitor call: RESET or RETAIN _TELEMETRY");
+
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_MANAGE_LOG_AND_TELEMETRY)) {
+		dev_err(g_sm_dev, "%s sender not allowed to manage telemetry\n", __FUNCTION__);
+		return -EPERM;
+	}
+
+	sm_smc_function = (retain) ? SECURITY_MONITOR_API_RETAIN_TELEMETRY :
+	                             SECURITY_MONITOR_API_RESET_TELEMETRY;
+
+	arm_smccc_smc(sm_smc_function, 0, 0, 0, 0, 0, 0, 0, &res);
+	err = res.a0;
+
+	dev_dbg(g_sm_dev,
+			"Security Monitor call: RESET or RETAIN _TELEMETRY returned %#x", err);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(azure_sphere_sm_reset_retain_telemetry);
+
+/// Configures a communication buffer for an IO Core
+///
+/// @core - The IO Core instance to control
+/// @type - The type of the communication buffer
+/// @physical_address - The physical address of the communication buffer
+/// @size - The size of the communication buffer
+/// @returns - 0 for success, non-zero for failure
+///
+int azure_sphere_sm_io_core_configure_communication_buffer(int core, uint32_t type, uintptr_t physical_address, loff_t size)
+{
+	return azure_sphere_io_core_control(SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_CONFIGURE_COMMUNICATION_BUFFER, core, physical_address, size, type);
+}
+EXPORT_SYMBOL_GPL(azure_sphere_sm_io_core_set_flags);
 
 ///
 /// Initializes our Security Monitor client driver

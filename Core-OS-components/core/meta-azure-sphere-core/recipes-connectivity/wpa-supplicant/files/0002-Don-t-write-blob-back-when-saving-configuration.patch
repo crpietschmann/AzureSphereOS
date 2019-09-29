@@ -1,0 +1,56 @@
+From 8c2603120e108f91bc53e2f7a138e6bd70b5d4c2 Mon Sep 17 00:00:00 2001
+From: Chris Ong <chong@microsoft.com>
+Date: Sun, 4 Aug 2019 10:48:29 -0700
+Subject: [PATCH] Don't write blob back when saving configuration.
+
+---
+ wpa_supplicant/config_file.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/wpa_supplicant/config_file.c b/wpa_supplicant/config_file.c
+index 09115e1..c333d17 100644
+--- a/wpa_supplicant/config_file.c
++++ b/wpa_supplicant/config_file.c
+@@ -1062,6 +1062,7 @@ static void wpa_config_write_cred(FILE *f, struct wpa_cred *cred)
+ 
+ 
+ #ifndef CONFIG_NO_CONFIG_BLOBS
++#ifndef CONFIG_DONT_WRITE_BLOBS
+ static int wpa_config_write_blob(FILE *f, struct wpa_config_blob *blob)
+ {
+ 	unsigned char *encoded;
+@@ -1074,6 +1075,7 @@ static int wpa_config_write_blob(FILE *f, struct wpa_config_blob *blob)
+ 	os_free(encoded);
+ 	return 0;
+ }
++#endif /* CONFIG_DONT_WRITE_BLOBS */
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+ 
+ 
+@@ -1526,7 +1528,9 @@ int wpa_config_write(const char *name, struct wpa_config *config)
+ 	struct wpa_ssid *ssid;
+ 	struct wpa_cred *cred;
+ #ifndef CONFIG_NO_CONFIG_BLOBS
++#ifndef CONFIG_DONT_WRITE_BLOBS
+ 	struct wpa_config_blob *blob;
++#endif /* CONFIG_DONT_WRITE_BLOBS */
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+ 	int ret = 0;
+ 	const char *orig_name = name;
+@@ -1569,11 +1573,13 @@ int wpa_config_write(const char *name, struct wpa_config *config)
+ 	}
+ 
+ #ifndef CONFIG_NO_CONFIG_BLOBS
++#ifndef CONFIG_DONT_WRITE_BLOBS
+ 	for (blob = config->blobs; blob; blob = blob->next) {
+ 		ret = wpa_config_write_blob(f, blob);
+ 		if (ret)
+ 			break;
+ 	}
++#endif /* CONFIG_DONT_WRITE_BLOBS */
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+ 
+ 	os_fdatasync(f);
+-- 
+2.17.1
+

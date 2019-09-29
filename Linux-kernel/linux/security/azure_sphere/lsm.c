@@ -30,147 +30,15 @@
 #include <linux/security.h>
 #include <linux/file.h>
 #include <linux/dcache.h>
-#include <linux/fs.h>
-#include <linux/vfs.h>
-#include <linux/xattr.h>
 #include <linux/cred.h>
 #include <linux/uaccess.h>
+#include <linux/mman.h>
 
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 
 #include <azure-sphere/security.h>
 #include "lsm.h"
-
-#define XATTR_GROUPS_SUFFIX "groups"
-#define XATTR_NAME_GROUPS XATTR_SECURITY_PREFIX XATTR_GROUPS_SUFFIX
-
-int get_groups_from_disk(struct vfsmount *mnt, struct dentry *dentry, gid_t **groups, int *group_count)
-{
-    int size;
-    struct inode *inode = d_backing_inode(dentry);
-
-    *groups = NULL;
-    *group_count = 0;
-
-    if (!inode)
-		return -ENODATA;
-
-    if (!mnt_may_suid(mnt))
-		return -ENODATA;
-
-    size = __vfs_getxattr(dentry, inode, XATTR_NAME_GROUPS, NULL, 0);
-	if (size == -ENODATA || size == -EOPNOTSUPP)
-		/* no data, that's ok */
-		return -ENODATA;
-	if (size < 0)
-		return size;
-
-    // Allocate if needed
-    *groups = kmalloc(size, GFP_KERNEL);
-	if (*groups == NULL)
-		return -ENOMEM;
-
-    *group_count = size / sizeof(gid_t);
-    size = __vfs_getxattr(dentry, inode, XATTR_NAME_GROUPS, *groups, size);
-    if (size < 0) {
-        kfree(*groups);
-        *groups = NULL;
-
-		return size;
-    }
-
-    return 0;
-}
-
-int azure_sphere_bprm_set_creds(struct linux_binprm *bprm)
-{
-    struct inode *inode;
-    struct group_info *gi;
-    unsigned int mode;
-    int group_count;
-    gid_t *groups;
-    int i;
-    kgid_t gid;
-
-    int error = 0;
-    	
-    // Do the basic cred setup
-    error = cap_bprm_set_creds(bprm);
-	if (error)
-		return error;
-
-    inode = file_inode(bprm->file);
-    mode = inode->i_mode;
-    gid = inode->i_gid;
-
-	if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP)) {
-		/* Set the real group id if the config is enabled */
-		if (IS_ENABLED(CONFIG_SREUID_AND_SREGID))
-			bprm->cred->gid = gid;
-
-        // Set supplemental groups if present
-        error = get_groups_from_disk(bprm->file->f_path.mnt, bprm->file->f_path.dentry, &groups, &group_count);
-        if (error != 0) {
-            if (error == -ENODATA) {
-                // No data here, set an empty group list
-                gi = groups_alloc(0);
-
-                if (!gi) {
-                    return -ENOMEM;
-                }
-
-                set_groups(bprm->cred, gi);
-	            put_group_info(gi);
-
-                return 0;
-            }
-
-            printk(KERN_ERR "Azure Sphere LSM: error getting groups: %i", error);
-
-            return error;
-        }
-
-        if (groups) {
-            struct user_namespace *user_ns;
-
-            // Set up our group membership
-            gi = groups_alloc(group_count);
-
-            if (!gi) {
-                kfree(groups);
-			    return -ENOMEM;
-            }
-
-            user_ns = &init_user_ns;
-
-            for (i = 0; i < group_count; i++) {
-				gi->gid[i] = make_kgid(user_ns, groups[i]);
-    		}
-
-            kfree(groups);
-
-            // Set groups
-            set_groups(bprm->cred, gi);
-	        put_group_info(gi);
-        }
-    }
-
-    return 0;
-}
-
-static inline int azure_sphere_inode_setxattr(struct dentry *dentry,
-		const char *name, const void *value, size_t size, int flags)
-{
-    // This XAttr is tied to SGID permissions
-    if (!strcmp(name, XATTR_NAME_GROUPS)) {
-		if (!capable(CAP_SETGID))
-			return -EPERM;
-		return 0;
-	}
-
-	return cap_inode_setxattr(dentry, name, value, size, flags);
-}
 
 static int azure_sphere_task_setpgid(struct task_struct *p, pid_t pgid)
 {
@@ -198,6 +66,7 @@ static int azure_sphere_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 static void azure_sphere_cred_free(struct cred *cred)
 {
 	struct azure_sphere_task_cred *tsec = cred->security;
+	cred->security = 0;
 	kfree(tsec);
 }
 
@@ -246,11 +115,34 @@ bool azure_sphere_capable(azure_sphere_capability_t cap)
 
     cred = get_task_cred(current);
     tsec = cred->security;
+    if (!cred->security) {
+        put_cred(cred);
+        return false;
+    }
 
     ret = ((tsec->capabilities & cap) == cap);
 
     put_cred(cred);
-    return ret;    
+    return ret;
+}
+
+bool azure_sphere_get_component_id(struct azure_sphere_guid *component_id, struct task_struct *p)
+{
+    const struct cred *cred;
+    const struct azure_sphere_task_cred *tsec;
+
+    cred = get_task_cred(p);
+    tsec = cred->security;
+    if (!cred->security) {
+        put_cred(cred);
+        return false;
+    }
+
+    *component_id = tsec->component_id.guid;
+
+    put_cred(cred);
+
+    return true;
 }
 
 static int azure_sphere_security_getprocattr(struct task_struct *p, char *name, char **value)
@@ -261,6 +153,12 @@ static int azure_sphere_security_getprocattr(struct task_struct *p, char *name, 
 
     cred = get_task_cred(p);
     tsec = cred->security;
+
+    //if no security entry then fail
+    if (!tsec) {
+        put_cred(cred);
+        return -ENOENT;
+    }
 
     if (strcmp(name, "exec") == 0) {
         *value = kmalloc(sizeof(*tsec), GFP_KERNEL);
@@ -311,16 +209,17 @@ static int azure_sphere_security_setprocattr(struct task_struct *p, char *name, 
         return -EPERM;
     }
 
-    if (size != sizeof(*data)) {
-        return -EINVAL;
-    }
-
     cred = prepare_creds();
     if (!cred) {
-        ret = -ENOMEM;
-        goto error;
+        return -ENOMEM;
     }
     tsec = cred->security;
+
+    //if no security entry then fail
+    if (!tsec) {
+        ret = -ENOENT;
+        goto error;
+    }
 
     if (!tsec->is_app_man) {
         ret = -EPERM;
@@ -342,9 +241,40 @@ error:
     return ret;
 }
 
+#ifdef CONFIG_AZURE_SPHERE_MMAP_EXEC_PROTECTION
+int azure_sphere_mmap_file(struct file *file, unsigned long reqprot, unsigned long prot, unsigned long flags) {
+    // if attempting write and execute at the same time then deny
+    if((reqprot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC))
+        return -EPERM;
+
+    //if requesting exec on shared memory then fail
+    if((reqprot & PROT_EXEC) && (flags & MAP_SHARED))
+        return -EPERM;
+
+    //all good
+    return 0;
+}
+
+int azure_sphere_file_mprotect(struct vm_area_struct *vma, unsigned long reqprot, unsigned long prot) {
+    // if attempting write and execute at the same time then deny
+    if((reqprot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC))
+        return -EPERM;
+
+    // check the current VMA flags, if swapping between write and execute then fail
+    if((vma->vm_flags & VM_WRITE) && (reqprot & PROT_EXEC)) {
+        return -EPERM;
+    }
+    else if((vma->vm_flags & VM_EXEC) && (reqprot & PROT_WRITE)) {
+        return -EPERM;
+    }
+    else if((vma->vm_flags & VM_SHARED) && (reqprot & PROT_EXEC)) {
+        return -EPERM;
+    }
+    return 0;
+}
+#endif
+
 static struct security_hook_list azure_sphere_hooks[] = {
-    LSM_HOOK_INIT(bprm_set_creds, azure_sphere_bprm_set_creds),
-	LSM_HOOK_INIT(inode_setxattr, azure_sphere_inode_setxattr),
     LSM_HOOK_INIT(task_setpgid, azure_sphere_task_setpgid),
     LSM_HOOK_INIT(cred_alloc_blank, azure_sphere_cred_alloc_blank),
     LSM_HOOK_INIT(cred_free, azure_sphere_cred_free),
@@ -352,6 +282,10 @@ static struct security_hook_list azure_sphere_hooks[] = {
     LSM_HOOK_INIT(cred_transfer, azure_sphere_cred_transfer),
     LSM_HOOK_INIT(getprocattr, azure_sphere_security_getprocattr),
     LSM_HOOK_INIT(setprocattr, azure_sphere_security_setprocattr),
+#ifdef CONFIG_AZURE_SPHERE_MMAP_EXEC_PROTECTION
+    LSM_HOOK_INIT(mmap_file, azure_sphere_mmap_file),
+    LSM_HOOK_INIT(file_mprotect, azure_sphere_file_mprotect),
+#endif
 };
 
 static int __init azure_sphere_lsm_init(void)

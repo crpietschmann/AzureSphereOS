@@ -111,12 +111,6 @@ config POWER_RESET_LTC2952
 	  This driver supports an external powerdown trigger and board power
 	  down via the LTC2952. Bindings are made in the device tree.
 
-config POWER_RESET_MT362X
-	bool "MT362X power-off and reset driver"
-	depends on ARM || ARM64
-	help
-	  Power off and reset support for MT362X. 
-
 config POWER_RESET_QNAP
 	bool "QNAP power-off driver"
 	depends on OF_GPIO && PLAT_ORION

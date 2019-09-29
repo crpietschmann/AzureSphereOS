@@ -30,9 +30,14 @@
 #include <linux/pm_runtime.h>
 #include <linux/scatterlist.h>
 #include <linux/spi/spi.h>
+#include <linux/bitops.h>
+
 
 #define DRV_NAME "spi-mt3620"
 #define DRV_VERSION "1.0"
+
+// Busy-wait in certain cases, but timeout at some point to avoid wedging.
+#define BUSY_WAIT_TIMEOUT_JIFFIES (10 * HZ)
 
 // Only use DMA for transfers > 32 bytes.
 #define TRANSFER_SIZE_THRESHOLD_DMA 32
@@ -73,6 +78,7 @@
 #define SMMR_RS_SLAVE_SEL_BIT 29
 #define SMMR_CLK_MODE 0x01000000
 #define SMMR_RS_CLK_SEL_BIT 16
+#define SMMR_RS_CLK_SEL_MASK (0xFFFU << SMMR_RS_CLK_SEL_BIT)
 #define SMMR_CS_DSEL_CNT_BIT 11
 #define SMMR_BOTH_DIRECTIONAL_DATA_MODE 0x00000400
 #define SMMR_INT_EN 0x00000200
@@ -102,6 +108,14 @@
 #define SDIR5 0x005C
 #define SDIR6 0x0060
 #define SDIR7 0x0064
+
+// Min clock divider yields 40 MHz with 80 MHz source clock
+#define MIN_CLK_DIVIDER 2
+
+// Max clock divider should be 4097, but that seems to send SPI
+// hardware into a bad state, so we adjust it a bit. This results
+// in an effective min bus speed of ~20KHz.
+#define MAX_CLK_DIVIDER 4000
 
 enum mt3620_spi_state { IRQ_RX, IRQ_TX, IRQ_SPI };
 
@@ -180,6 +194,19 @@ static struct dma_chan *
 	return chan;
 }
 
+static void mt3620_spi_release_dma(struct mt3620_spi *spi_mt3620)
+{
+	if (spi_mt3620->dma_tx) {
+		dma_release_channel(spi_mt3620->dma_tx);
+		spi_mt3620->dma_tx = NULL;
+	}
+
+	if (spi_mt3620->dma_rx) {
+		dma_release_channel(spi_mt3620->dma_rx);
+		spi_mt3620->dma_rx = NULL;
+	}
+}
+
 static void mt3620_spi_write(struct mt3620_spi *spi_mt3620, u32 offset,
 			     u32 data)
 {
@@ -191,15 +218,80 @@ static u32 mt3620_spi_read(struct mt3620_spi *spi_mt3620, u32 offset)
 	return readl(((u8 *)spi_mt3620->base) + offset);
 }
 
-static int mt3620_spi_prepare_message(struct spi_master *master,
-				      struct spi_message *msg)
+static void mt3620_spi_set_cs(struct spi_device *spi, bool enable)
 {
-	struct mt3620_spi *spi_mt3620 = spi_master_get_devdata(master);
+	struct mt3620_spi *spi_mt3620 = spi_master_get_devdata(spi->master);
+	u32 cspol;
+	u32 mask;
 
-	// Set CS#0 to high-active; this will assert CS#0
-	// for the message.
-	// (as the transfer will use dummy CS#7)
-	mt3620_spi_write(spi_mt3620, CSPOL, 1);
+	BUG_ON(spi->chip_select >= 2);
+
+	// 'enable' indicates the level to set the CS line (true for
+	// high, false for low); it already has had cs_change policies
+	// and CS polarity factored in. For chip select lines 0 and 1,
+	// we manually toggle CS#0 or CS#1, respectively, via the
+	// SPI controller.  But because its automatic CS logic
+	// doesn't work for our purposes, we always tell it that we're
+	// using dummy CS#7 for real transactions.  So if 'enable' is
+	// false, we need to get CS low now, so we set CS#n to high-
+	// active--and the SPI controller, which believes that line
+	// to be inactive, will leave the signal low.
+	cspol = mt3620_spi_read(spi_mt3620, CSPOL);
+	mask = BIT(spi->chip_select);
+
+	if (enable) {
+		cspol &= ~mask;
+	} else {
+		cspol |= mask;
+	}
+
+	mt3620_spi_write(spi_mt3620, CSPOL, cspol);
+}
+
+static int mt3620_spi_prepare_message(struct spi_master *master,
+					struct spi_message *msg)
+{
+	//
+	// This function is responsible for updating hardware configuration
+	// to comply with the per-message configuration requested by the
+	// client. It is not, however, responsible for managing chip select
+	// or responsible for applying per-*transfer* configuration
+	// (e.g. speed).
+	//
+	struct mt3620_spi *spi_mt3620 = spi_master_get_devdata(master);
+	struct spi_device *spi = msg->spi;
+	u32 smmr;
+
+	// All previous transfers must have been finished by now.
+	BUG_ON(mt3620_spi_read(spi_mt3620, SCSR) != 0);
+
+	// Set SMMR to desired configuration; we intentionally do this before chip
+	// select gets enabled for the actual message:
+	//   - set clock divider
+	//   - enable interrupts (if requested)
+	//   - set CPOL/CPHA
+	//   - enable "more buf mode"
+	//   - assert unused chip select CS#7 (we need to control chip select manually
+	//     because we need chip select to remain asserted across multiple hardware
+	//     managed transactions)
+	//   - leave interrupts disabled for now; we'll enable them later as we
+	//     find we need to
+	smmr = SMMR_MORE_BUF_MODE | (7 << SMMR_RS_SLAVE_SEL_BIT) |
+	       SMMR_PFETCH_EN;
+
+	smmr |= spi_mt3620->current_rs_clk_sel << SMMR_RS_CLK_SEL_BIT;
+
+	if (spi->mode & SPI_CPOL)
+		smmr |= SMMR_CPOL;
+
+	if (spi->mode & SPI_CPHA)
+		smmr |= SMMR_CPHA;
+
+	if (spi->mode & SPI_LSB_FIRST)
+		smmr |= SMMR_LSB_FIRST;
+
+	mt3620_spi_write(spi_mt3620, SMMR, smmr);
+
 	return 0;
 }
 
@@ -207,9 +299,6 @@ static int mt3620_spi_unprepare_message(struct spi_master *master,
 					struct spi_message *msg)
 {
 	struct mt3620_spi *spi_mt3620 = spi_master_get_devdata(master);
-
-	// Set CS#0 to low-active to de-assert CS#0.
-	mt3620_spi_write(spi_mt3620, CSPOL, 0);
 
 	// If the transfer is still in process, then abort.
 	int old_irq_state = atomic_xchg(&spi_mt3620->irq_state, 0);
@@ -268,25 +357,12 @@ u32 *mt3620_transfer_continue(struct mt3620_spi *spi_mt3620,
 		soar = *(u8 *)(transfer->tx_buf + spi_mt3620->transfer_ptr);
 	}
 
-	// Set SMMR:
-	// - set clock divider
-	// - enable interrupts (if requested)
-	// - set CPOL/CPHA
-	// - enable "more buf mode"
-	// - assert unused chip select (we need to control chip select manually)
-	smmr = SMMR_MORE_BUF_MODE | (7 << SMMR_RS_SLAVE_SEL_BIT) |
-	       SMMR_PFETCH_EN;
-
-	smmr |= spi_mt3620->current_rs_clk_sel << SMMR_RS_CLK_SEL_BIT;
-
-	if (enable_irq)
+	smmr = mt3620_spi_read(spi_mt3620, SMMR);
+	if (enable_irq) {
 		smmr |= SMMR_INT_EN;
-
-	if (spi->mode & SPI_CPOL)
-		smmr |= SMMR_CPOL;
-
-	if (spi->mode & SPI_CPHA)
-		smmr |= SMMR_CPHA;
+	} else {
+		smmr &= ~SMMR_INT_EN;
+	}
 
 	stcsr = STCSR_SPI_MASTER_START;
 
@@ -566,33 +642,14 @@ static int mt3620_spi_transfer_one(struct spi_master *master,
 	bool use_dma = transfer->len > TRANSFER_SIZE_THRESHOLD_DMA;
 	bool use_irq = transfer->len > TRANSFER_SIZE_THRESHOLD_IRQ;
 
-	// all previous transfers must have been finished by now.
-	BUG_ON(mt3620_spi_read(spi_mt3620, SCSR) != 0);
-
-	if (transfer->speed_hz != spi_mt3620->current_speed_hz) {
-		int div;
-
-		// The clock is hclk/(2+rs_clk_sel), with hclk typically
-		// being 80MHz (PLL) or XTAL.
-
-		if (transfer->speed_hz > 0)
-			div = DIV_ROUND_UP(clk_get_rate(spi_mt3620->spi_clk),
-					   transfer->speed_hz);
-		else
-			div = 4097;
-
-		// Clip high rates to max speed.
-
-		if (div >= 2)
-			div -= 2;
-
-		// Clip low rates at min speed (hclk/4097)
-
-		if (div > 4095)
-			div = 4095;
-
-		spi_mt3620->current_rs_clk_sel = div;
-		spi_mt3620->current_speed_hz = transfer->speed_hz;
+	// All previous transfers must have been finished by now.
+	// We don't ever expect to get into this case, but if we do,
+	// we want to handle it gracefully.
+	u32 scsr = mt3620_spi_read(spi_mt3620, SCSR);
+	if (scsr != 0) {
+		WARN_ON(scsr != 0);
+		dev_err(&spi->dev, "h/w is busy; SCSR=0x%x\n", scsr);
+		return -EBUSY;
 	}
 
 	if (!transfer->len)
@@ -601,8 +658,46 @@ static int mt3620_spi_transfer_one(struct spi_master *master,
 	spi_mt3620->cur_transfer = transfer;
 	spi_mt3620->cur_device = spi;
 	spi_mt3620->transfer_ptr = 0;
-
 	spi_mt3620->use_dma = use_dma;
+
+	// Update SPI bus speed, if needed.
+	if (transfer->speed_hz != spi_mt3620->current_speed_hz) {
+		int div = 0;
+		u32 smmr;
+
+		// The clock is hclk/(2+rs_clk_sel), with hclk typically
+		// being 80MHz (PLL) or XTAL.
+		if (transfer->speed_hz > 0)
+			div = DIV_ROUND_UP(clk_get_rate(spi_mt3620->spi_clk),
+					   transfer->speed_hz);
+
+		// Clip high rates to max speed.
+		if (div < MIN_CLK_DIVIDER) {
+			div = MIN_CLK_DIVIDER;
+			dev_warn(&spi->dev, "requested speed too high (%u); clipping to %lu (div=%d)\n",
+					transfer->speed_hz,
+					DIV_ROUND_UP(clk_get_rate(spi_mt3620->spi_clk), div),
+					div);
+		}
+
+		// Clip low rates to min speed.
+		if (div > MAX_CLK_DIVIDER) {
+			div = MAX_CLK_DIVIDER;
+			dev_warn(&spi->dev, "requested speed too low (%u); clipping to %lu (div=%d)\n",
+					transfer->speed_hz,
+					DIV_ROUND_UP(clk_get_rate(spi_mt3620->spi_clk), div),
+					div);
+		}
+
+		spi_mt3620->current_rs_clk_sel = div - 2;
+		spi_mt3620->current_speed_hz = transfer->speed_hz;
+
+		// Update the divider in registers.
+		smmr = mt3620_spi_read(spi_mt3620, SMMR);
+		smmr &= ~SMMR_RS_CLK_SEL_MASK;
+		smmr |= spi_mt3620->current_rs_clk_sel << SMMR_RS_CLK_SEL_BIT;
+		mt3620_spi_write(spi_mt3620, SMMR, smmr);
+	}
 
 	if (!use_dma) {
 		// transmit a single burst up to 32-bytes.
@@ -611,12 +706,18 @@ static int mt3620_spi_transfer_one(struct spi_master *master,
 		// for tiny transfers, busy wait; otherwise,
 		// wait for interrupt.
 		if (!use_irq) {
+			unsigned long deadline = jiffies + BUSY_WAIT_TIMEOUT_JIFFIES;
+			bool timed_out = false;
 			while (!(mt3620_spi_read(spi_mt3620, SCSR) &
 				 SCSR_SPI_OK)) {
+				if (time_after_eq(jiffies, deadline)) {
+					timed_out = true;
+					break;
+				}
 				cpu_relax_lowlatency();
 			}
 
-			if (transfer->rx_buf) {
+			if (!timed_out && transfer->rx_buf) {
 				memcpy(transfer->rx_buf +
 					       spi_mt3620->transfer_ptr,
 				       ((u8 *)spi_mt3620->base) + SDIR0,
@@ -625,7 +726,7 @@ static int mt3620_spi_transfer_one(struct spi_master *master,
 
 			spi_finalize_current_transfer(master);
 			spi_mt3620->cur_transfer = NULL;
-			return 0;
+			return timed_out ? -ETIMEDOUT : 0;
 		}
 	} else {
 		int ret;
@@ -717,6 +818,8 @@ static int mt3620_spi_probe(struct platform_device *pdev)
 	int irq, ret;
 	dma_addr_t phy_data_port_addr;
 
+	dev_info(&pdev->dev, "probe\n");
+
 	master = spi_alloc_master(&pdev->dev, sizeof(*spi_mt3620));
 
 	if (!master) {
@@ -724,13 +827,15 @@ static int mt3620_spi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	master->bus_num = pdev->id;
 	master->dev.of_node = pdev->dev.of_node;
-	master->mode_bits = SPI_CPOL | SPI_CPHA;
+	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST | SPI_CS_HIGH;
 	master->num_chipselect = 2;
-	master->max_speed_hz = 30000000;
+	master->max_speed_hz = 40000000;
 	master->flags = 0;
 	master->bits_per_word_mask = SPI_BPW_MASK(8);
 	master->transfer_one = mt3620_spi_transfer_one;
+	master->set_cs = mt3620_spi_set_cs;
 	master->prepare_message = mt3620_spi_prepare_message;
 	master->unprepare_message = mt3620_spi_unprepare_message;
 
@@ -771,10 +876,10 @@ static int mt3620_spi_probe(struct platform_device *pdev)
 	sg_init_table(&spi_mt3620->tx_sg, 1);
 	sg_init_table(&spi_mt3620->rx_sg, 1);
 
-	spi_mt3620->rx_buf = kzalloc(DMA_BUF_SIZE, GFP_KERNEL);
-	spi_mt3620->tx_buf = kzalloc(DMA_BUF_SIZE, GFP_KERNEL);
+	spi_mt3620->rx_buf = devm_kzalloc(&pdev->dev, DMA_BUF_SIZE, GFP_KERNEL);
+	spi_mt3620->tx_buf = devm_kzalloc(&pdev->dev, DMA_BUF_SIZE, GFP_KERNEL);
 
-	if (!spi_mt3620->rx_buf || !spi_mt3620->rx_buf) {
+	if (!spi_mt3620->rx_buf || !spi_mt3620->tx_buf) {
 		dev_err(&pdev->dev, "failed to allocate DMA buffer\n");
 		goto err_put_master;
 	}
@@ -798,8 +903,9 @@ static int mt3620_spi_probe(struct platform_device *pdev)
 
 	spi_mt3620->spi_clk = devm_clk_get(&pdev->dev, NULL);
 
-	if (!spi_mt3620->spi_clk) {
+	if (IS_ERR(spi_mt3620->spi_clk)) {
 		dev_err(&pdev->dev, "failed to get clock (%d)\n", ret);
+		ret = PTR_ERR(spi_mt3620->spi_clk);
 		goto err_put_master;
 	}
 
@@ -820,10 +926,6 @@ static int mt3620_spi_probe(struct platform_device *pdev)
 err_disable_runtime_pm:
 	pm_runtime_disable(&pdev->dev);
 err_put_master:
-	if (spi_mt3620->rx_buf)
-		kfree(spi_mt3620->rx_buf);
-	if (spi_mt3620->tx_buf)
-		kfree(spi_mt3620->tx_buf);
 	spi_master_put(master);
 
 	return ret;
@@ -834,12 +936,17 @@ static int mt3620_spi_remove(struct platform_device *pdev)
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct mt3620_spi *spi_mt3620 = spi_master_get_devdata(master);
 
+	dev_info(&pdev->dev, "remove\n");
+
 	pm_runtime_disable(&pdev->dev);
-	if (spi_mt3620->rx_buf)
-		kfree(spi_mt3620->rx_buf);
-	if (spi_mt3620->tx_buf)
-		kfree(spi_mt3620->tx_buf);
+
+	/* Remove SPI master */
 	spi_master_put(master);
+
+	/* Free allocated resources that won't be freed automatically */
+	mt3620_spi_release_dma(spi_mt3620);
+
+	/* TODO: uninitialize hardware? */
 
 	return 0;
 }

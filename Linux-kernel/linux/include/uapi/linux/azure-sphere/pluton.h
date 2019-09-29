@@ -35,8 +35,8 @@ struct azure_sphere_get_security_state_result {
 };
 
 struct azure_sphere_ecc256_public_key {
-    uint8_t X[32];
-    uint8_t Y[32];
+    uint32_t X[8];
+    uint32_t Y[8];
 };
 
 struct azure_sphere_ecdsa256_signature {

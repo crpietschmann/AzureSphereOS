@@ -10,6 +10,10 @@
 #
 # This work is licensed under the terms of the GNU GPL version 2.
 #
+# Modifications:
+#   - Microsoft Feb 2019 - Add linux.vma package.
+#
+
 
 import os
 
@@ -31,3 +35,4 @@ else:
     import linux.lists
     import linux.proc
     import linux.constants
+    import linux.vma

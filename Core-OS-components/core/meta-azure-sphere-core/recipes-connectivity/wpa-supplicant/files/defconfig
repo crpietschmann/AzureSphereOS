@@ -29,7 +29,7 @@ CONFIG_LIBNL32=y
 #CONFIG_EAP_MSCHAPV2=y
 
 # EAP-TLS
-#CONFIG_EAP_TLS=y
+CONFIG_EAP_TLS=y
 
 # EAL-PEAP
 #CONFIG_EAP_PEAP=y
@@ -221,7 +221,14 @@ CONFIG_INTERNAL_LIBTOMMATH=y
 #LIBS_p += -lbfd -liberty -lz
 #LIBS_c += -lbfd -liberty -lz
 
-CONFIG_TLS = internal
+CONFIG_TLS = %ssl%
+
+# TLS-based EAP methods require at least TLS v1.0. Newer version of TLS (v1.2)
+# can be enabled to enable use of stronger crypto algorithms. It should be
+# noted that some existing TLS v1.0 -based implementation may not be compatible
+# with TLS v1.2 message (ClientHello is sent prior to negotiating which version
+# will be used)
+CONFIG_TLSV12=y
 
 # wpa_supplicant depends on strong random number generation being available
 # from the operating system. os_get_random() function is used to fetch random
@@ -305,9 +312,15 @@ CONFIG_BGSCAN_LEARN=y
 #
 # Enabling directly a module will enable autoscan support.
 # For exponential module:
-CONFIG_AUTOSCAN_EXPONENTIAL=y
+#CONFIG_AUTOSCAN_EXPONENTIAL=y
 # For periodic module:
 #CONFIG_AUTOSCAN_PERIODIC=y
+# For the mixed exponential and periodic module
+CONFIG_AUTOSCAN_MIXED=y
+
+# The size limit on the temporary config file created while saving the supplicant's
+# configuration to storage.
+CONFIG_TEMP_CONFIG_FILE_SIZE = 8192
 
 # Password (and passphrase, etc.) backend for external storage
 # These optional mechanisms can be used to add support for storing passwords

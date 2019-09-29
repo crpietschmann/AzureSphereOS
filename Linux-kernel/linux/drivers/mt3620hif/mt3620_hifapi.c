@@ -45,12 +45,12 @@
 struct mt3620_hif_management_info *mt3620_hif_api_get_hif_management_info(u8 sequence_number);
 
 static struct mt3620_hif_api_n9_event_handlers *g_n9_event_handlers = NULL;
-uint8_t g_tx_buf[MAX_BUF_SIZE_MT3620 + 0x10];         
 static fw_image_tailer_t *n9_fw_info;
 uint8_t *g_pwifi_dma_base_address;
 static u8 g_mt3620_last_sequence_number;
 static u32 g_mt3620_sequence_number_use[8];
 static struct dma_pool *g_mt3620_mgmt_pool;
+static spinlock_t g_management_list_lock;
 
 syscfg_t g_wifi_profile;
 
@@ -127,7 +127,7 @@ u8 mt3620_hif_api_get_next_sequence_number(void)
 	u32 mask;
 	u8 ret;
 
-
+	spin_lock(&g_management_list_lock);
 
 	for (i = 0; i < MAX_SEQUENCE_NUMBER; i++) {
 		g_mt3620_last_sequence_number++;
@@ -143,13 +143,10 @@ u8 mt3620_hif_api_get_next_sequence_number(void)
 		}
 	}
 
-
+	spin_unlock(&g_management_list_lock);
 
 	return ret;
 }
-
-
-
 
 ///
 /// Initialization of Remote API
@@ -160,6 +157,8 @@ int mt3620_hif_api_init(void)
 	g_mt3620_last_sequence_number = 0;
 	g_mt3620_sequence_number_use[0] = 0x1; // 0 is a reserved sequence number that
 					// should never be handed out
+
+	spin_lock_init(&g_management_list_lock);
 
 	g_mt3620_mgmt_pool =
 	    dma_pool_create("A7-HIF", g_pmt3620_hif_proc->dev,
@@ -186,12 +185,11 @@ void mt3620_hif_api_shutdown(void)
 	}
 }
 
-
 ///
 /// Allocate and initialize new management info item
 ///
 /// @returns -  New item
-struct mt3620_hif_management_info *
+static struct mt3620_hif_management_info *
 mt3620_hif_api_alloc_hif_management_info(void)
 {
 	struct mt3620_hif_management_info *ret = NULL;
@@ -209,12 +207,11 @@ mt3620_hif_api_alloc_hif_management_info(void)
 	return ret;
 }
 
-
 ///
 /// Return a sequence number to the pool
 ///
 /// @sequence_number - Sequence number
-void mt3620_hif_api_free_sequence_number(u8 sequence_number)
+static void mt3620_hif_api_free_sequence_number(u8 sequence_number)
 {
 	u32 idx;
 	u32 mask;
@@ -231,6 +228,22 @@ void mt3620_hif_api_free_sequence_number(u8 sequence_number)
 	g_mt3620_sequence_number_use[idx] &= ~(1 << mask);
 }
 
+static void mt3620_hif_api_free_management_info(struct mt3620_hif_management_info *mgmt_item)
+{
+	if (!mgmt_item)
+		return;
+
+	// Free packet memory if needed
+	if (mgmt_item->inner_packet) {
+		devm_kfree(g_pmt3620_hif_proc->dev, (void *)mgmt_item->inner_packet);
+	}
+
+	// Release sequence number
+	mt3620_hif_api_free_sequence_number(mgmt_item->sequence_number);
+
+	// Free mgmt item
+	dma_pool_free(g_mt3620_mgmt_pool, mgmt_item, mgmt_item->hwaddr);
+}
 
 ///
 /// Gets a free relay management info item
@@ -243,50 +256,11 @@ void mt3620_hif_api_free_sequence_number(u8 sequence_number)
 struct mt3620_hif_management_info *
 mt3620_hif_api_get_free_hif_management_info(void)
 {
-	struct list_head *pos, *q;
 	struct mt3620_hif_management_info *mgmt_item = NULL;
 	struct mt3620_hif_management_info *ret = NULL;
 
-	
-
-
-	// Free any pending items.  In the future we should consider having the
-	// relay protocol
-	// proactively indicate which buffers can be freed rather than scanning
-	// like this
-	list_for_each_safe(pos, q, &g_pmt3620_hif_proc->hif_management_list)
-	{
-		mgmt_item =
-		    list_entry(pos, struct mt3620_hif_management_info, list);
-
-		// Cleanup this item if it's ready
-		// It's ready if the M4 has marked it completed and
-		// we either expect no response or the response has been
-		// processed.
-		if (mgmt_item->response_type == NO_RESPONSE ||
-		     mgmt_item->response_processed == true) {
-			dev_dbg(g_pmt3620_hif_proc->dev,
-				"Freeing memory at %#x",
-				(u32)mgmt_item->inner_packet);
-
-			// Free packet memory if needed
-			if (mgmt_item->inner_packet) {
-				devm_kfree(g_pmt3620_hif_proc->dev,
-					   (void *)mgmt_item->inner_packet);
-			}
-
-			// Remove from list
-			list_del(pos);
-
-			// Release sequence number
-			mt3620_hif_api_free_sequence_number(
-			    mgmt_item->sequence_number);
-
-			// Free mgmt item
-			dma_pool_free(g_mt3620_mgmt_pool, mgmt_item,
-				      mgmt_item->hwaddr);
-		}
-	}
+	// Acquire lock
+	spin_lock(&g_management_list_lock);
 
 	// Allocate our new item
 	mgmt_item = mt3620_hif_api_alloc_hif_management_info();
@@ -298,7 +272,8 @@ mt3620_hif_api_get_free_hif_management_info(void)
 		ret = mgmt_item;
 	}
 
-
+	// Release lock lock
+	spin_unlock(&g_management_list_lock);
 
 	return ret;
 }
@@ -379,11 +354,13 @@ static const char *mt3620_hif_api_cmd_to_string(enum n9_commands cmd)
 /// @data_size - Size of data packet in bytes
 /// @response_type - How to handle response
 /// @response_data - Data to use in response handling
+/// @sequence_number - output - sequence number if sent or 0
 /// @returns -  0 for success
 int mt3620_hif_api_send_command_to_n9(
     void *handle, enum n9_commands cmd, bool set, void *data, u32 data_size,
     enum mt3620_hif_response_type response_type,
-    union mt3620_hif_response_data response_data)
+    union mt3620_hif_response_data response_data,
+	uint8_t *sequence_number)
 {
 	int ret = SUCCESS;
 	u8 *buffer;
@@ -393,6 +370,8 @@ int mt3620_hif_api_send_command_to_n9(
 	u32 tx_size = 0;
 	struct n9_command_header header;
 	struct mt3620_hif_management_info *mgmt_info;	
+
+	*sequence_number = 0;
 	
       // get ownership back
       if (mt3620_hif_get_ownership() == false)
@@ -477,7 +456,6 @@ int mt3620_hif_api_send_command_to_n9(
 		mgmt_info->response_type = response_type ;
 		mgmt_info->response_data = response_data;
 		mgmt_info->sequence_number = header.wifi_command.sequence_number;
-		mgmt_info->response_processed = false;
 		mgmt_info->inner_packet = buffer;
 		mgmt_info->inner_packet_size = header.byte_count;
 					// Now that we've filled out data we call the DMA mapping APIs to ensure
@@ -493,6 +471,9 @@ int mt3620_hif_api_send_command_to_n9(
 		if (ret == HIF_STATUS_SUCCESS){
 			dev_dbg(g_pmt3620_hif_proc->dev,"Sending N9 Command\n");
 			ret = mt3620_hif_fifo_write((unsigned char *)buffer, tx_size);
+			*sequence_number = header.wifi_command.sequence_number;
+		} else {
+			mt3620_hif_api_free_management_info(mgmt_info);
 		}
 	
 	exit:
@@ -516,10 +497,11 @@ int mt3620_hif_api_send_command_to_n9_async(
     void *handle, enum n9_commands cmd, bool set, void *data, u32 data_size,
     mt3620_hif_api_callback callback)
 {
+	uint8_t sequence_number;
 	union mt3620_hif_response_data response_data = {.callback = callback};
 
 	return mt3620_hif_api_send_command_to_n9(
-	    handle, cmd, set, data, data_size, CALLBACK, response_data);
+	    handle, cmd, set, data, data_size, CALLBACK, response_data, &sequence_number);
 }
 EXPORT_SYMBOL(mt3620_hif_api_send_command_to_n9_async);
 
@@ -544,6 +526,7 @@ int mt3620_hif_api_send_command_to_n9_sync(void *handle,
 	u8 status = 0;
 	int ret;
 	u32 time_remaining = 0;
+	uint8_t sequence_number = 0;
 
 	union mt3620_hif_response_data response_data = {
 	    .completion = {.completion = &c,
@@ -560,12 +543,12 @@ int mt3620_hif_api_send_command_to_n9_sync(void *handle,
 
 	// Send command
 	ret = mt3620_hif_api_send_command_to_n9(
-	    handle, cmd, set, data, data_size, COMPLETION, response_data);
+	    handle, cmd, set, data, data_size, COMPLETION, response_data, &sequence_number);
 	if (ret != SUCCESS) {
 		return ret;
 	}
 
-	// Requests should get resposnes in a small amount of time (usec or msc)
+	// Requests should get responses in a small amount of time (usec or msc)
 	// We put a timeout here to catch cases where a response never comes.
 	// This is always unexpected but we WARN and return so we can recover.
 	
@@ -575,9 +558,9 @@ int mt3620_hif_api_send_command_to_n9_sync(void *handle,
 	WARN_ON(time_remaining == 0);
 
 	if (time_remaining == 0) {	
-		struct mt3620_hif_management_info *mgmt_info = 
-			mt3620_hif_api_get_hif_management_info(g_mt3620_last_sequence_number);
-		mgmt_info->response_processed = true;
+		struct mt3620_hif_management_info *mgmt_info = mt3620_hif_api_get_hif_management_info(sequence_number);
+		mt3620_hif_api_free_management_info(mgmt_info);
+
 		return -ETIMEDOUT;
 	}
 
@@ -609,10 +592,11 @@ int mt3620_hif_api_send_command_to_n9_no_response(void *handle,
 						     bool set, void *data,
 						     u32 data_size)
 {
+	uint8_t sequence_number;
 	union mt3620_hif_response_data response_data = {};
 
 	return mt3620_hif_api_send_command_to_n9(
-	    handle, cmd, set, data, data_size, NO_RESPONSE, response_data);
+	    handle, cmd, set, data, data_size, NO_RESPONSE, response_data, &sequence_number);
 		
 }
 
@@ -801,11 +785,7 @@ int mt3620_hif_api_send_data_to_n9(void *handle, u8 interface,
 
 EXPORT_SYMBOL(mt3620_hif_api_send_data_to_n9);
 
-
-
 #define N9_INT_MASK 0x1f
-
-
 
 ///
 /// Gets the management info item for a sequence number
@@ -818,16 +798,24 @@ mt3620_hif_api_get_hif_management_info(u8 sequence_number)
 	struct mt3620_hif_management_info *mgmt_item = NULL;
 	struct mt3620_hif_management_info *ret = NULL;
 
-	
+	// Acquire lock
+	spin_lock(&g_management_list_lock);
 
 	list_for_each_entry(mgmt_item, &g_pmt3620_hif_proc->hif_management_list,
 			    list)
 	{
 		if (mgmt_item->sequence_number == sequence_number) {
 			ret = mgmt_item;
+
+			// Remove from list
+			list_del(&mgmt_item->list);
+
 			break;
 		}
 	}
+	
+	// Release lock
+	spin_unlock(&g_management_list_lock);
 
 	return ret;
 }
@@ -886,8 +874,7 @@ void mt3620_hif_api_process_response(u32 cmd, u32 status, u8 sequence_number,
 			mgmt_item->response_type);
 	}
 
-		
-	mgmt_item->response_processed = true;
+	mt3620_hif_api_free_management_info(mgmt_item);
 }
 
 
@@ -1169,6 +1156,12 @@ int32_t mt3620_hif_fw_download_Tx_Scatter(uint8_t *image, uint32_t len)
     uint32_t read_len = 0;
     uint32_t pos = 0, offset = 0;
     uint32_t tx_len;
+	uint8_t *buffer = NULL;
+
+	buffer = kzalloc(MAX_BUF_SIZE_MT3620 + 0x10, GFP_KERNEL);
+	if (!buffer) {
+		return -ENOMEM;
+	}
 
   //  log_hal_info( "<<%s>>\n", __FUNCTION__);
     while (left_len)
@@ -1185,20 +1178,19 @@ int32_t mt3620_hif_fw_download_Tx_Scatter(uint8_t *image, uint32_t len)
         // prepare txd
         tx_len = LEN_SDIO_TX_AGG_WRAPPER(LEN_INBAND_CMD_HDR_ROM + read_len);
 
-       	memset(g_tx_buf, 0, tx_len);
-        offset = mt3620_hif_create_inband_fw_scatter_txd_rom(LEN_INBAND_CMD_HDR_ROM + read_len, g_tx_buf);
+		
+       	memset(buffer, 0, tx_len);
+        offset = mt3620_hif_create_inband_fw_scatter_txd_rom(LEN_INBAND_CMD_HDR_ROM + read_len, buffer);
 
-        memcpy(&g_tx_buf[offset], &image[pos], read_len);
+        memcpy(&buffer[offset], &image[pos], read_len);
 
         pos += read_len;
         left_len -= read_len;
 
     	dev_dbg(g_pmt3620_hif_proc->dev,"<<%s>> Read file total_len: %d.\n", __FUNCTION__, (int)pos);
-        
    
-
         // write to dut
-        ret = mt3620_hif_fifo_write(g_tx_buf, tx_len);
+        ret = mt3620_hif_fifo_write(buffer, tx_len);
         if (ret != 0)
         {
             // error cuures
@@ -1206,6 +1198,8 @@ int32_t mt3620_hif_fw_download_Tx_Scatter(uint8_t *image, uint32_t len)
             err = 1;;
         }
     }
+
+	kfree(buffer);
     return err;
 }
 

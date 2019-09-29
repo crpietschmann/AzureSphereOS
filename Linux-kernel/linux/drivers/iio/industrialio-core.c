@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* The industrial I/O core
  *
  * Copyright (c) 2008 Jonathan Cameron
@@ -7,6 +8,12 @@
  * the Free Software Foundation.
  *
  * Based on elements of hwmon and input subsystems.
+*/
+
+/* 
+	Microsoft Updates: 
+	- Added support for custom IOCTLs to iio_ioctl() to enable using IIO
+	drivers without sysfs
  */
 
 #define pr_fmt(fmt) "iio-core: " fmt
@@ -32,6 +39,7 @@
 #include <linux/iio/sysfs.h>
 #include <linux/iio/events.h>
 #include <linux/iio/buffer.h>
+#include <linux/iio/ioctl.h>
 
 /* IDA to assign each registered device a unique id */
 static DEFINE_IDA(iio_ida);
@@ -1432,7 +1440,9 @@ static long iio_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 		return 0;
 	}
-	return -EINVAL;
+
+	// If we didn't handle it above, chain it to the nosysfs IOCTL handler.
+	return iio_nosysfs_ioctl(filp, cmd, arg);
 }
 
 static const struct file_operations iio_buffer_fileops = {

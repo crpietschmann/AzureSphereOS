@@ -1,0 +1,73 @@
+From 7b28320d6c3686a55d1555f9eb6c9755536b8dbe Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Tue, 23 Jan 2018 08:33:07 -0800
+Subject: [PATCH] Don't use large fixed size buffers for paths.
+
+---
+ gdb/nat/linux-namespaces.c |  7 +++++--
+ gdb/nat/linux-procfs.c     | 28 +++++++++++++++++++---------
+ 2 files changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/gdb/nat/linux-namespaces.c b/gdb/nat/linux-namespaces.c
+index 1df8f1b..1653e49 100644
+--- a/gdb/nat/linux-namespaces.c
++++ b/gdb/nat/linux-namespaces.c
+@@ -93,10 +93,13 @@ struct linux_ns
+ static const char *
+ linux_ns_filename (struct linux_ns *ns, int pid)
+ {
+-  static char filename[PATH_MAX];
++  static char *filename = NULL;
++  free(filename);
+ 
++  int len = 128 + strlen(ns->filename);
++  filename = (char*)xmalloc(len);
+   gdb_assert (pid > 0);
+-  xsnprintf (filename, sizeof (filename), "/proc/%d/ns/%s", pid,
++  xsnprintf (filename, len, "/proc/%d/ns/%s", pid,
+ 	     ns->filename);
+ 
+   return filename;
+diff --git a/gdb/nat/linux-procfs.c b/gdb/nat/linux-procfs.c
+index 5290045..2a100f9 100644
+--- a/gdb/nat/linux-procfs.c
++++ b/gdb/nat/linux-procfs.c
+@@ -344,16 +344,26 @@ linux_proc_task_list_dir_exists (pid_t pid)
+ char *
+ linux_proc_pid_to_exec_file (int pid)
+ {
+-  static char buf[PATH_MAX];
+-  char name[PATH_MAX];
+-  ssize_t len;
+-
+-  xsnprintf (name, PATH_MAX, "/proc/%d/exe", pid);
+-  len = readlink (name, buf, PATH_MAX - 1);
+-  if (len <= 0)
+-    strcpy (buf, name);
++  static char *buf = NULL;
++  char name[128];
++  struct stat statbuf;
++  free(buf);	// free the buffer used last time
++
++  xsnprintf (name, 128, "/proc/%d/exe", pid);
++  if (lstat(name, &statbuf) < 0)	// failed to stat file
++  {
++	  buf = xstrdup(name);
++  }
++  else if (S_ISLNK(statbuf.st_mode) && statbuf.st_size > 0)	// file is a link
++  {
++	  buf = (char*)xmalloc(statbuf.st_size);
++	  ssize_t len = readlink(name, buf, statbuf.st_size - 1);
++	  buf[statbuf.st_size] = '\0';
++  }
+   else
+-    buf[len] = '\0';
++  {
++	  buf = xstrdup(name);
++  }
+ 
+   return buf;
+ }
+-- 
+2.7.4
+

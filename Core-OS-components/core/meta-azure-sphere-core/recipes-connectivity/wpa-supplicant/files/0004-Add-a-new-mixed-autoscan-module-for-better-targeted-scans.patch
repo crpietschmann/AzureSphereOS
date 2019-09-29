@@ -1,0 +1,562 @@
+From 6377bb6e5f4d0a44f68b822a1a71d2801a421285 Mon Sep 17 00:00:00 2001
+From: Hassan Sufi <hasufi@microsoft.com>
+Date: Wed, 3 Jul 2019 15:47:05 -0700
+Subject: [PATCH] Add a new mixed autoscan module for better targeted scans
+
+%% original patch: 0004-Add-a-new-mixed-autoscan-module-for-better-targeted-scans.patch
+---
+ wpa_supplicant/Makefile               |   6 +
+ wpa_supplicant/autoscan.c             |  30 ++++
+ wpa_supplicant/autoscan.h             |  18 ++
+ wpa_supplicant/autoscan_exponential.c |  10 ++
+ wpa_supplicant/autoscan_mixed.c       | 235 ++++++++++++++++++++++++++
+ wpa_supplicant/autoscan_periodic.c    |  10 ++
+ wpa_supplicant/ctrl_iface.c           |  11 +-
+ wpa_supplicant/notify.c               |  39 ++++-
+ wpa_supplicant/notify.h               |   3 +
+ 9 files changed, 359 insertions(+), 3 deletions(-)
+ create mode 100644 wpa_supplicant/autoscan_mixed.c
+
+diff --git a/wpa_supplicant/Makefile b/wpa_supplicant/Makefile
+index c2e93e2..a219752 100644
+--- a/wpa_supplicant/Makefile
++++ b/wpa_supplicant/Makefile
+@@ -1740,6 +1740,12 @@ OBJS += autoscan_periodic.o
+ NEED_AUTOSCAN=y
+ endif
+ 
++ifdef CONFIG_AUTOSCAN_MIXED
++CFLAGS += -DCONFIG_AUTOSCAN_MIXED
++OBJS += autoscan_mixed.o
++NEED_AUTOSCAN=y
++endif
++
+ ifdef NEED_AUTOSCAN
+ CFLAGS += -DCONFIG_AUTOSCAN
+ OBJS += autoscan.o
+diff --git a/wpa_supplicant/autoscan.c b/wpa_supplicant/autoscan.c
+index 5056a93..da909c4 100644
+--- a/wpa_supplicant/autoscan.c
++++ b/wpa_supplicant/autoscan.c
+@@ -24,6 +24,9 @@ static const struct autoscan_ops * autoscan_modules[] = {
+ #ifdef CONFIG_AUTOSCAN_PERIODIC
+ 	&autoscan_periodic_ops,
+ #endif /* CONFIG_AUTOSCAN_PERIODIC */
++#ifdef CONFIG_AUTOSCAN_MIXED
++	&autoscan_mixed_ops,
++#endif /* CONFIG_AUTOSCAN_MIXED */
+ 	NULL
+ };
+ 
+@@ -154,9 +157,36 @@ int autoscan_notify_scan(struct wpa_supplicant *wpa_s,
+ 
+ 		wpa_s->scan_interval = interval;
+ 		wpa_s->sched_scan_plans[0].interval = interval;
++		wpa_printf(MSG_DEBUG, "autoscan: Interval %d", wpa_s->scan_interval);
+ 
+ 		request_scan(wpa_s);
+ 	}
+ 
+ 	return 0;
+ }
++
++void autoscan_notify_active_scan(struct wpa_supplicant *wpa_s,
++			 int targeted_network_added)
++{
++	wpa_printf(MSG_DEBUG, "autoscan: active scan notification received");
++	if (!wpa_s->autoscan || !wpa_s->autoscan_priv) {
++		wpa_printf(MSG_DEBUG, "autoscan: Nothing to do in active"
++			   " scan notification");
++		return;
++	}
++
++	wpa_s->autoscan->notify_active_scan(wpa_s->autoscan_priv,
++										targeted_network_added);
++}
++
++void autoscan_notify_disconnected(struct wpa_supplicant *wpa_s)
++{
++	wpa_printf(MSG_DEBUG, "autoscan: active scan notification received");
++	if (!wpa_s->autoscan || !wpa_s->autoscan_priv) {
++		wpa_printf(MSG_DEBUG, "autoscan: Nothing to do in disconnected"
++			   " notification");
++		return;
++	}
++
++	wpa_s->autoscan->notify_disconnected(wpa_s->autoscan_priv);
++}
+\ No newline at end of file
+diff --git a/wpa_supplicant/autoscan.h b/wpa_supplicant/autoscan.h
+index 560684f..d6decf9 100644
+--- a/wpa_supplicant/autoscan.h
++++ b/wpa_supplicant/autoscan.h
+@@ -18,6 +18,8 @@ struct autoscan_ops {
+ 	void (*deinit)(void *priv);
+ 
+ 	int (*notify_scan)(void *priv, struct wpa_scan_results *scan_res);
++	void (*notify_active_scan)(void *priv, int increment);
++	void (*notify_disconnected)(void *priv);
+ };
+ 
+ #ifdef CONFIG_AUTOSCAN
+@@ -26,6 +28,9 @@ int autoscan_init(struct wpa_supplicant *wpa_s, int req_scan);
+ void autoscan_deinit(struct wpa_supplicant *wpa_s);
+ int autoscan_notify_scan(struct wpa_supplicant *wpa_s,
+ 			 struct wpa_scan_results *scan_res);
++void autoscan_notify_active_scan(struct wpa_supplicant *wpa_s,
++			 int targeted_network_added);
++void autoscan_notify_disconnected(struct wpa_supplicant *wpa_s);
+ 
+ /* Available autoscan modules */
+ 
+@@ -37,6 +42,10 @@ extern const struct autoscan_ops autoscan_exponential_ops;
+ extern const struct autoscan_ops autoscan_periodic_ops;
+ #endif /* CONFIG_AUTOSCAN_PERIODIC */
+ 
++#ifdef CONFIG_AUTOSCAN_MIXED
++extern const struct autoscan_ops autoscan_mixed_ops;
++#endif /* CONFIG_AUTOSCAN_MIXED */
++
+ #else /* CONFIG_AUTOSCAN */
+ 
+ static inline int autoscan_init(struct wpa_supplicant *wpa_s, int req_scan)
+@@ -54,6 +63,15 @@ static inline int autoscan_notify_scan(struct wpa_supplicant *wpa_s,
+ 	return 0;
+ }
+ 
++static inline void autoscan_notify_active_scan(struct wpa_supplicant *wpa_s,
++					   int targeted_network_added)
++{
++}
++
++static inline void autoscan_notify_disconnected(struct wpa_supplicant *wpa_s)
++{
++}
++
+ #endif /* CONFIG_AUTOSCAN */
+ 
+ #endif /* AUTOSCAN_H */
+diff --git a/wpa_supplicant/autoscan_exponential.c b/wpa_supplicant/autoscan_exponential.c
+index 424477b..3407306 100644
+--- a/wpa_supplicant/autoscan_exponential.c
++++ b/wpa_supplicant/autoscan_exponential.c
+@@ -95,10 +95,20 @@ static int autoscan_exponential_notify_scan(void *priv,
+ 	return data->interval;
+ }
+ 
++static void autoscan_exponential_notify_active_scan(void *priv,
++					   int targeted_network_added)
++{
++}
++
++static void autoscan_exponential_notify_disconnected(void *priv)
++{
++}
+ 
+ const struct autoscan_ops autoscan_exponential_ops = {
+ 	.name = "exponential",
+ 	.init = autoscan_exponential_init,
+ 	.deinit = autoscan_exponential_deinit,
+ 	.notify_scan = autoscan_exponential_notify_scan,
++	.notify_active_scan = autoscan_exponential_notify_active_scan,
++	.notify_disconnected = autoscan_exponential_notify_disconnected,
+ };
+diff --git a/wpa_supplicant/autoscan_mixed.c b/wpa_supplicant/autoscan_mixed.c
+new file mode 100644
+index 0000000..12c33c4
+--- /dev/null
++++ b/wpa_supplicant/autoscan_mixed.c
+@@ -0,0 +1,235 @@
++/*
++ * WPA Supplicant - auto scan mixed module
++ *
++ * This software may be distributed under the terms of the BSD license.
++ * See README for more details.
++ */
++
++#include "includes.h"
++
++#include "autoscan.h"
++#include "common.h"
++#include "config.h"
++#include "config_ssid.h"
++#include "wpa_supplicant_i.h"
++
++struct autoscan_mixed_data
++{
++	struct wpa_supplicant *wpa_s;
++	int base;
++	int limit;
++	int periodic_interval;
++	int interval;
++
++	int enabled_targeted_network_count;
++	int number_of_scans_per_pass;
++	int current_index;
++	int target_index;
++	int completed_full_pass;
++};
++
++static int get_targeted_scan_interval(struct autoscan_mixed_data *data);
++static inline void increment_index(struct autoscan_mixed_data *data);
++static inline void reset_pass(struct autoscan_mixed_data *data);
++static inline void update_scans_per_pass(struct autoscan_mixed_data *data);
++static inline void update_target_index(struct autoscan_mixed_data *data);
++static void update_enabled_targeted_networks_count(struct autoscan_mixed_data *data);
++
++static int autoscan_mixed_get_params(struct autoscan_mixed_data *data,
++									 const char *params)
++{
++	const char *pos;
++
++	if (params == NULL)
++		return -1;
++
++	data->base = atoi(params);
++
++	pos = os_strchr(params, ':');
++	if (pos == NULL)
++		return -1;
++
++	pos++;
++	data->limit = atoi(pos);
++
++	pos = os_strchr(pos, ':');
++	if (pos == NULL)
++		return -1;
++
++	pos++;
++	data->periodic_interval = atoi(pos);
++
++	data->enabled_targeted_network_count = 0;
++	data->number_of_scans_per_pass = 1;
++	data->current_index = 0;
++	data->target_index = 0;
++	data->completed_full_pass = 0;
++	return 0;
++}
++
++static void *autoscan_mixed_init(struct wpa_supplicant *wpa_s,
++								 const char *params)
++{
++	struct autoscan_mixed_data *data;
++
++	data = os_zalloc(sizeof(struct autoscan_mixed_data));
++	if (data == NULL)
++		return NULL;
++
++	if (autoscan_mixed_get_params(data, params) < 0) {
++		os_free(data);
++		return NULL;
++	}
++
++	wpa_printf(MSG_DEBUG,
++			   "autoscan mixed: base exponent is %d with a limit of"
++			   " %d, periodic interval for targeted scans is %d",
++			   data->base, data->limit, data->periodic_interval);
++
++	data->wpa_s = wpa_s;
++	update_enabled_targeted_networks_count(data);
++	update_scans_per_pass(data);
++	update_target_index(data);
++
++	return data;
++}
++
++static void autoscan_mixed_deinit(void *priv)
++{
++	struct autoscan_mixed_data *data = priv;
++
++	os_free(data);
++}
++
++static int autoscan_mixed_notify_scan(void *priv,
++									  struct wpa_scan_results *scan_res)
++{
++	struct autoscan_mixed_data *data = priv;
++
++	int interval = get_targeted_scan_interval(data);
++	if (interval > 0) {
++		return interval;
++	}
++
++	if (data->interval >= data->limit)
++		return data->limit;
++
++	if (data->interval <= 0)
++		data->interval = data->base;
++	else {
++		data->interval = data->interval * data->base;
++		if (data->interval > data->limit)
++			return data->limit;
++	}
++
++	return data->interval;
++}
++
++static int get_targeted_scan_interval(struct autoscan_mixed_data *data)
++{
++	increment_index(data);
++
++	// If we're connected, return an invalid interval
++	if (data->wpa_s->current_ssid != NULL) {
++		wpa_printf(MSG_DEBUG, "autoscan mixed: Connected to some "
++			   "network, don't bother");
++		reset_pass(data);
++		return -1;
++	}
++
++	if (data->enabled_targeted_network_count <= 0) {
++		wpa_printf(MSG_DEBUG, "autoscan mixed: No enabled targeted "
++			   "networks");
++		return -1;
++	}
++
++	if (data->completed_full_pass) {
++		wpa_printf(MSG_DEBUG, "autoscan mixed: Already completed a "
++			   "full pass");
++		return -1;
++	}
++
++	if (data->current_index == data->target_index) {
++		wpa_printf(MSG_DEBUG, "autoscan mixed: Completed a full pass");
++		data->completed_full_pass = 1;
++		return -1;
++	}
++
++	return data->periodic_interval;
++}
++
++static inline void reset_pass(struct autoscan_mixed_data *data)
++{
++	data->completed_full_pass = 0;
++}
++
++static inline void increment_index(struct autoscan_mixed_data *data)
++{
++	data->current_index =
++		(data->current_index + 1) % data->number_of_scans_per_pass;
++}
++
++static inline void update_scans_per_pass(struct autoscan_mixed_data *data)
++{
++	data->number_of_scans_per_pass =
++		(2 * data->enabled_targeted_network_count) + 1;
++}
++
++static inline void update_target_index(struct autoscan_mixed_data *data)
++{
++	data->target_index = data->current_index % data->number_of_scans_per_pass;
++}
++
++static void update_enabled_targeted_networks_count(struct autoscan_mixed_data *data)
++{
++	wpa_printf(MSG_DEBUG, "autoscan mixed: Updating count of"
++		   " enabled targeted networks");
++
++	struct wpa_ssid *ssid = data->wpa_s->conf->ssid;
++	int count = 0;
++	for (; ssid; ssid = ssid->next) {
++		if (!wpas_network_disabled(data->wpa_s, ssid) && ssid->scan_ssid) {
++			 count++;
++		}
++	}
++	data->enabled_targeted_network_count = count;
++	wpa_printf(MSG_DEBUG, "autoscan mixed: Enabled targeted"
++		   " network count %d", count);
++}
++
++static void autoscan_mixed_notify_active_scan(void *priv,
++											  int targeted_network_added)
++{
++	struct autoscan_mixed_data *data = priv;
++	wpa_printf(MSG_DEBUG, "autoscan mixed: Notified of the need for"
++		   " active scanning");
++
++	if (targeted_network_added) {
++		data->enabled_targeted_network_count++;
++	} else {
++		data->enabled_targeted_network_count--;
++	}
++
++	update_scans_per_pass(data);
++	update_target_index(data);
++	if (targeted_network_added) {
++		reset_pass(data);
++	}
++}
++
++static void autoscan_mixed_notify_disconnected(void *priv)
++{
++	wpa_printf(MSG_DEBUG, "autoscan mixed: Resetting exponential"
++		   " interval");
++	struct autoscan_mixed_data *data = priv;
++	data->interval = 0;
++}
++
++const struct autoscan_ops autoscan_mixed_ops = {
++	.name = "mixed",
++	.init = autoscan_mixed_init,
++	.deinit = autoscan_mixed_deinit,
++	.notify_scan = autoscan_mixed_notify_scan,
++	.notify_active_scan = autoscan_mixed_notify_active_scan,
++	.notify_disconnected = autoscan_mixed_notify_disconnected,
++};
+diff --git a/wpa_supplicant/autoscan_periodic.c b/wpa_supplicant/autoscan_periodic.c
+index 102d723..33937e1 100644
+--- a/wpa_supplicant/autoscan_periodic.c
++++ b/wpa_supplicant/autoscan_periodic.c
+@@ -76,10 +76,20 @@ static int autoscan_periodic_notify_scan(void *priv,
+ 	return data->periodic_interval;
+ }
+ 
++static int autoscan_periodic_notify_active_scan(void *priv,
++					 int targeted_network_added)
++{
++}
++
++static void autoscan_periodic_notify_disconnected(void *priv)
++{
++}
+ 
+ const struct autoscan_ops autoscan_periodic_ops = {
+ 	.name = "periodic",
+ 	.init = autoscan_periodic_init,
+ 	.deinit = autoscan_periodic_deinit,
+ 	.notify_scan = autoscan_periodic_notify_scan,
++	.notify_active_scan = autoscan_periodic_notify_active_scan,
++	.notify_disconnected = autoscan_periodic_notify_disconnected,
+ };
+diff --git a/wpa_supplicant/ctrl_iface.c b/wpa_supplicant/ctrl_iface.c
+index 77a3133..2163e30 100644
+--- a/wpa_supplicant/ctrl_iface.c
++++ b/wpa_supplicant/ctrl_iface.c
+@@ -3335,7 +3335,7 @@ static int wpa_supplicant_ctrl_iface_update_network(
+ static int wpa_supplicant_ctrl_iface_set_network(
+ 	struct wpa_supplicant *wpa_s, char *cmd)
+ {
+-	int id, ret, prev_bssid_set, prev_disabled;
++	int id, ret, prev_bssid_set, prev_disabled, prev_scan_ssid;
+ 	struct wpa_ssid *ssid;
+ 	char *name, *value;
+ 	u8 prev_bssid[ETH_ALEN];
+@@ -3366,6 +3366,7 @@ static int wpa_supplicant_ctrl_iface_set_network(
+ 
+ 	prev_bssid_set = ssid->bssid_set;
+ 	prev_disabled = ssid->disabled;
++	prev_scan_ssid = ssid->scan_ssid;
+ 	os_memcpy(prev_bssid, ssid->bssid, ETH_ALEN);
+ 	ret = wpa_supplicant_ctrl_iface_update_network(wpa_s, ssid, name,
+ 						       value);
+@@ -3378,6 +3379,14 @@ static int wpa_supplicant_ctrl_iface_set_network(
+ 	    (prev_disabled == 2 || ssid->disabled == 2))
+ 		wpas_notify_network_type_changed(wpa_s, ssid);
+ 
++	if (!wpas_network_disabled(wpa_s, ssid)) {
++		if (prev_scan_ssid && !ssid->scan_ssid) {
++			wpas_notify_targeted_network_removed(wpa_s);
++		} else if (!prev_scan_ssid && ssid->scan_ssid) {
++			wpas_notify_targeted_network_added(wpa_s);
++		}
++	}
++
+ 	return ret;
+ }
+ 
+diff --git a/wpa_supplicant/notify.c b/wpa_supplicant/notify.c
+index 83df04f..f2c8adf 100644
+--- a/wpa_supplicant/notify.c
++++ b/wpa_supplicant/notify.c
+@@ -24,6 +24,7 @@
+ #include "p2p_supplicant.h"
+ #include "sme.h"
+ #include "notify.h"
++#include "autoscan.h"
+ 
+ int wpas_notify_supplicant_initialized(struct wpa_global *global)
+ {
+@@ -111,10 +112,12 @@ void wpas_notify_state_changed(struct wpa_supplicant *wpa_s,
+ 	}
+ #endif /* CONFIG_FST */
+ 
+-	if (new_state == WPA_COMPLETED)
++	if (new_state == WPA_COMPLETED) {
+ 		wpas_p2p_notif_connected(wpa_s);
+-	else if (old_state >= WPA_ASSOCIATED && new_state < WPA_ASSOCIATED)
++	} else if (old_state >= WPA_ASSOCIATED && new_state < WPA_ASSOCIATED) {
++		wpas_notify_disconnected(wpa_s);
+ 		wpas_p2p_notif_disconnected(wpa_s);
++	}
+ 
+ 	sme_state_changed(wpa_s);
+ 
+@@ -192,6 +195,14 @@ void wpas_notify_network_enabled_changed(struct wpa_supplicant *wpa_s,
+ 		return;
+ 
+ 	wpas_dbus_signal_network_enabled_changed(wpa_s, ssid);
++
++	if (ssid->scan_ssid) {
++		if (ssid->disabled == 1) {
++			wpas_notify_targeted_network_removed(wpa_s);
++		} else if (ssid->disabled == 0) {
++			wpas_notify_targeted_network_added(wpa_s);
++		}
++	}
+ }
+ 
+ 
+@@ -250,6 +261,26 @@ void wpas_notify_scan_results(struct wpa_supplicant *wpa_s)
+ 	wpas_wps_notify_scan_results(wpa_s);
+ }
+ 
++void wpas_notify_targeted_network_added(struct wpa_supplicant *wpa_s)
++{
++#ifdef CONFIG_AUTOSCAN
++	autoscan_notify_active_scan(wpa_s, 1);
++#endif /* CONFIG_AUTOSCAN */
++}
++
++void wpas_notify_targeted_network_removed(struct wpa_supplicant *wpa_s)
++{
++#ifdef CONFIG_AUTOSCAN
++	autoscan_notify_active_scan(wpa_s, 0);
++#endif /* CONFIG_AUTOSCAN */
++}
++
++void wpas_notify_disconnected(struct wpa_supplicant *wpa_s)
++{
++#ifdef CONFIG_AUTOSCAN
++	autoscan_notify_disconnected(wpa_s);
++#endif /* CONFIG_AUTOSCAN */
++}
+ 
+ void wpas_notify_wps_credential(struct wpa_supplicant *wpa_s,
+ 				const struct wps_credential *cred)
+@@ -359,6 +390,10 @@ void wpas_notify_network_removed(struct wpa_supplicant *wpa_s,
+ 	if (network_is_persistent_group(ssid))
+ 		wpas_notify_persistent_group_removed(wpa_s, ssid);
+ 
++	if (!wpas_network_disabled(wpa_s, ssid) && ssid->scan_ssid) {
++		wpas_notify_targeted_network_removed(wpa_s);
++	}
++
+ 	wpas_p2p_network_removed(wpa_s, ssid);
+ }
+ 
+diff --git a/wpa_supplicant/notify.h b/wpa_supplicant/notify.h
+index 3ca933c..9e225be 100644
+--- a/wpa_supplicant/notify.h
++++ b/wpa_supplicant/notify.h
+@@ -39,6 +39,9 @@ void wpas_notify_network_request(struct wpa_supplicant *wpa_s,
+ void wpas_notify_scanning(struct wpa_supplicant *wpa_s);
+ void wpas_notify_scan_done(struct wpa_supplicant *wpa_s, int success);
+ void wpas_notify_scan_results(struct wpa_supplicant *wpa_s);
++void wpas_notify_targeted_network_added(struct wpa_supplicant *wpa_s);
++void wpas_notify_targeted_network_removed(struct wpa_supplicant *wpa_s);
++void wpas_notify_disconnected(struct wpa_supplicant *wpa_s);
+ void wpas_notify_wps_credential(struct wpa_supplicant *wpa_s,
+ 				const struct wps_credential *cred);
+ void wpas_notify_wps_event_m2d(struct wpa_supplicant *wpa_s,
+-- 
+2.17.1
+

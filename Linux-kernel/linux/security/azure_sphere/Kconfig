@@ -4,3 +4,10 @@ config SECURITY_AZURE_SPHERE
 	default n
 	help
 	  This enables the Azure Sphere LSM.
+
+config AZURE_SPHERE_MMAP_EXEC_PROTECTION
+	bool "Azure Sphere mmap protection"
+	depends on SECURITY_AZURE_SPHERE
+	default y
+	help
+		This enables memory protections to protect writable pages from being made executable

@@ -136,4 +136,11 @@ struct linux_binprm;
 int arch_setup_additional_pages(struct linux_binprm *, int);
 #endif
 
+#ifdef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
+struct mm_struct;
+unsigned long arch_randomize_brk_with_stack(struct mm_struct *mm,
+		unsigned long start_stack);
+#define arch_randomize_brk_with_stack arch_randomize_brk_with_stack
+#endif
+
 #endif

@@ -92,7 +92,7 @@ int security_monitor_get_log_data(void __user *arg)
 		goto exit;
 	}
 
-	if (log_data.offset > log_data.total_size) {
+	if (log_data.offset >= log_data.total_size) {
 		ret = -E2BIG;
 		goto exit;
 	}

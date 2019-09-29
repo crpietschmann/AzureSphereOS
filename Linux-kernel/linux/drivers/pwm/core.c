@@ -17,6 +17,9 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program; see the file COPYING.  If not, write to
  *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ * Modifications:
+ *   - Microsoft Mar 2019 - Add calls to export/unexport character device
  */
 
 #include <linux/module.h>
@@ -76,6 +79,10 @@ static void free_pwms(struct pwm_chip *chip)
 	for (i = 0; i < chip->npwm; i++) {
 		struct pwm_device *pwm = &chip->pwms[i];
 
+		kfree(pwm->state.extended_state);
+		pwm->state.extended_state = NULL;
+		pwm->state.extended_state_size = 0;
+
 		radix_tree_delete(&pwm_tree, pwm->pwm);
 	}
 
@@ -130,6 +137,25 @@ static int pwm_device_request(struct pwm_device *pwm, const char *label)
 	pwm->label = label;
 
 	return 0;
+}
+
+bool pwm_state_equal(const struct pwm_state *s1, const struct pwm_state *s2)
+{
+	bool equal = true;
+
+	if (s1->extended_state_size != s2->extended_state_size)
+		return false;
+
+	if (memcmp(s1->extended_state, s2->extended_state,
+		   s1->extended_state_size))
+		return false;
+
+	equal &= s1->period == s2->period;
+	equal &= s1->duty_cycle == s2->duty_cycle;
+	equal &= s1->polarity == s2->polarity;
+	equal &= s1->enabled == s2->enabled;
+
+	return equal;
 }
 
 struct pwm_device *
@@ -302,10 +328,14 @@ int pwmchip_add_with_polarity(struct pwm_chip *chip,
 	if (IS_ENABLED(CONFIG_OF))
 		of_pwmchip_add(chip);
 
-	pwmchip_sysfs_export(chip);
-
 out:
 	mutex_unlock(&pwm_lock);
+
+	if (!ret) {
+		pwmchip_sysfs_export(chip);
+		pwmchip_chardev_export(chip);
+	}
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(pwmchip_add_with_polarity);
@@ -339,7 +369,11 @@ int pwmchip_remove(struct pwm_chip *chip)
 	unsigned int i;
 	int ret = 0;
 
-	pwmchip_sysfs_unexport_children(chip);
+	pwmchip_sysfs_unexport(chip);
+
+	pwmchip_chardev_unexport_children(chip);
+
+	pwmchip_chardev_unexport(chip);
 
 	mutex_lock(&pwm_lock);
 
@@ -358,8 +392,6 @@ int pwmchip_remove(struct pwm_chip *chip)
 		of_pwmchip_remove(chip);
 
 	free_pwms(chip);
-
-	pwmchip_sysfs_unexport(chip);
 
 out:
 	mutex_unlock(&pwm_lock);
@@ -463,7 +495,7 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 	    state->duty_cycle > state->period)
 		return -EINVAL;
 
-	if (!memcmp(state, &pwm->state, sizeof(*state)))
+	if (pwm_state_equal(state, &pwm->state))
 		return 0;
 
 	if (pwm->chip->ops->apply) {
@@ -471,8 +503,30 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 		if (err)
 			return err;
 
+		kfree(pwm->state.extended_state);
+		pwm->state.extended_state = NULL;
+
 		pwm->state = *state;
+
+		if (state->extended_state) {
+			pwm->state.extended_state =
+				kzalloc(state->extended_state_size, GFP_KERNEL);
+			if (!pwm->state.extended_state)
+				return -ENOMEM;
+
+			memcpy(pwm->state.extended_state, state->extended_state,
+			       state->extended_state_size);
+			pwm->state.extended_state_size =
+				state->extended_state_size;
+		}
 	} else {
+		if (state->extended_state) {
+			/*
+			 * Don't support extended state without apply
+			 */
+			return -ENOTSUPP;
+		}
+
 		/*
 		 * FIXME: restore the initial state in case of error.
 		 */

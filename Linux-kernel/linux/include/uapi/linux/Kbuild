@@ -350,6 +350,7 @@ header-y += prctl.h
 header-y += psci.h
 header-y += ptp_clock.h
 header-y += ptrace.h
+header-y += pwm.h
 header-y += qnx4_fs.h
 header-y += qnxtypes.h
 header-y += quota.h

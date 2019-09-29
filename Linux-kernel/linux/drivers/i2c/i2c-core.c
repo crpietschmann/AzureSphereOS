@@ -25,6 +25,7 @@
    I2C ACPI code Copyright (C) 2014 Intel Corp
    Author: Lan Tianyu <tianyu.lan@intel.com>
    I2C slave support (c) 2014 by Wolfram Sang <wsa@sang-engineering.com>
+   I2C runtime speed configuration support by Microsoft 2018
  */
 
 #define pr_fmt(fmt) "i2c-core: " fmt
@@ -3250,16 +3251,16 @@ static s32 i2c_smbus_xfer_emulated(struct i2c_adapter *adapter, u16 addr,
 				   the underlying bus driver */
 		break;
 	case I2C_SMBUS_I2C_BLOCK_DATA:
+		if (data->block[0] > I2C_SMBUS_BLOCK_MAX) {
+			dev_err(&adapter->dev, "Invalid block %s size %d\n",
+				read_write == I2C_SMBUS_READ ? "read" : "write",
+				data->block[0]);
+			return -EINVAL;
+		}
 		if (read_write == I2C_SMBUS_READ) {
 			msg[1].len = data->block[0];
 		} else {
 			msg[0].len = data->block[0] + 1;
-			if (msg[0].len > I2C_SMBUS_BLOCK_MAX + 1) {
-				dev_err(&adapter->dev,
-					"Invalid block write size %d\n",
-					data->block[0]);
-				return -EINVAL;
-			}
 			for (i = 1; i <= data->block[0]; i++)
 				msgbuf0[i] = data->block[i];
 		}
@@ -3446,6 +3447,16 @@ s32 i2c_smbus_read_i2c_block_data_or_emulated(const struct i2c_client *client,
 	return i;
 }
 EXPORT_SYMBOL(i2c_smbus_read_i2c_block_data_or_emulated);
+
+int i2c_set_speed(struct i2c_adapter *adapter, u32 speed_in_hz)
+{
+	if (!adapter->algo->set_speed) {
+		dev_err(&adapter->dev, "%s: not supported by adapter\n", __func__);
+		return -EINVAL;
+	}
+
+	return adapter->algo->set_speed(adapter, speed_in_hz);
+}
 
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 int i2c_slave_register(struct i2c_client *client, i2c_slave_cb_t slave_cb)

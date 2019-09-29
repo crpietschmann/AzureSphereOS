@@ -1,3 +1,4 @@
 # UAPI Header export list
 header-y += pluton.h
+header-y += security.h
 header-y += security_monitor.h

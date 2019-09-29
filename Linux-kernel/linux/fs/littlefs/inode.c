@@ -813,6 +813,8 @@ static int littlefs_inode_test(struct inode *inode, void *data)
 
 	path = dentry_path_raw(dentry, buf, sizeof(buf));
 
+	dput(dentry);
+
 	if (IS_ERR(path)) {
 		return 0;
 	}

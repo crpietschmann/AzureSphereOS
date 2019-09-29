@@ -22,6 +22,7 @@
 
 #include "entry-header.S"
 
+	declare_cfi_section
 
 	.align	5
 #if !(IS_ENABLED(CONFIG_TRACE_IRQFLAGS) || IS_ENABLED(CONFIG_CONTEXT_TRACKING))
@@ -32,8 +33,10 @@
  * features make this path too inefficient.
  */
 ret_fast_syscall:
+__ret_fast_syscall:
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)
+	cfi_mark_user_regs offset = 0
 	disable_irq_notrace			@ disable interrupts
 	ldr	r1, [tsk, #TI_FLAGS]		@ re-check for syscall tracing
 	tst	r1, #_TIF_SYSCALL_WORK | _TIF_WORK_MASK
@@ -57,8 +60,10 @@ fast_work_pending:
  * r0 first to avoid needing to save registers around each C function call.
  */
 ret_fast_syscall:
+__ret_fast_syscall:
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)
+	cfi_mark_user_regs offset = S_OFF
 	str	r0, [sp, #S_R0 + S_OFF]!	@ save returned r0
 	disable_irq_notrace			@ disable interrupts
 	ldr	r1, [tsk, #TI_FLAGS]		@ re-check for syscall tracing
@@ -81,6 +86,7 @@ slow_work_pending:
 	movlt	scno, #(__NR_restart_syscall - __NR_SYSCALL_BASE)
 	ldmia	sp, {r0 - r6}			@ have to reload r0 - r6
 	b	local_restart			@ ... and off we go
+	cfi_end_user_regs
 ENDPROC(ret_fast_syscall)
 
 /*
@@ -90,6 +96,7 @@ ENDPROC(ret_fast_syscall)
  * do_work_pending() will update this state if necessary.
  */
 ENTRY(ret_to_user)
+	cfi_mark_user_regs offset = 0
 ret_slow_syscall:
 	disable_irq_notrace			@ disable interrupts
 ENTRY(ret_to_user_from_irq)
@@ -104,6 +111,7 @@ no_work_pending:
 	ct_user_enter save = 0
 
 	restore_user_regs fast = 0, offset = 0
+	cfi_end_user_regs
 ENDPROC(ret_to_user_from_irq)
 ENDPROC(ret_to_user)
 
@@ -111,6 +119,7 @@ ENDPROC(ret_to_user)
  * This is how we return from a fork.
  */
 ENTRY(ret_from_fork)
+	cfi_mark_user_regs offset = 0
 	bl	schedule_tail
 	cmp	r5, #0
 	movne	r0, r4
@@ -118,6 +127,7 @@ ENTRY(ret_from_fork)
 	retne	r5
 1:	get_thread_info tsk
 	b	ret_slow_syscall
+	cfi_end_user_regs
 ENDPROC(ret_from_fork)
 
 	.equ NR_syscalls,0
@@ -142,6 +152,7 @@ ENDPROC(ret_from_fork)
 
 	.align	5
 ENTRY(vector_swi)
+	cfi_mark_user_regs offset = S_OFF
 #ifdef CONFIG_CPU_V7M
 	v7m_exception_entry
 #else
@@ -223,9 +234,7 @@ local_restart:
 	tst	r10, #_TIF_SYSCALL_WORK		@ are we tracing syscalls?
 	bne	__sys_trace
 
-	cmp	scno, #NR_syscalls		@ check upper syscall limit
-	badr	lr, ret_fast_syscall		@ return address
-	ldrcc	pc, [tbl, scno, lsl #2]		@ call sys_* routine
+	invoke_syscall tbl, scno, r10, __ret_fast_syscall
 
 	add	r1, sp, #S_OFF
 2:	cmp	scno, #(__ARM_NR_BASE - __NR_SYSCALL_BASE)
@@ -248,6 +257,7 @@ local_restart:
 	str	lr, [sp, #S_PC]
 	b	ret_fast_syscall
 #endif
+	cfi_end_user_regs
 ENDPROC(vector_swi)
 
 	/*
@@ -258,14 +268,8 @@ __sys_trace:
 	mov	r1, scno
 	add	r0, sp, #S_OFF
 	bl	syscall_trace_enter
-
-	badr	lr, __sys_trace_return		@ return address
-	mov	scno, r0			@ syscall number (possibly new)
-	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
-	cmp	scno, #NR_syscalls		@ check upper syscall limit
-	ldmccia	r1, {r0 - r6}			@ have to reload r0 - r6
-	stmccia	sp, {r4, r5}			@ and update the stack args
-	ldrcc	pc, [tbl, scno, lsl #2]		@ call sys_* routine
+	mov	scno, r0
+	invoke_syscall tbl, scno, r10, __sys_trace_return, reload=1
 	cmp	scno, #-1			@ skip the syscall?
 	bne	2b
 	add	sp, sp, #S_OFF			@ restore stack
@@ -317,6 +321,10 @@ sys_syscall:
 		bic	scno, r0, #__NR_OABI_SYSCALL_BASE
 		cmp	scno, #__NR_syscall - __NR_SYSCALL_BASE
 		cmpne	scno, #NR_syscalls	@ check range
+#ifdef CONFIG_CPU_SPECTRE
+		movhs	scno, #0
+		csdb
+#endif
 		stmloia	sp, {r5, r6}		@ shuffle args
 		movlo	r0, r1
 		movlo	r1, r2

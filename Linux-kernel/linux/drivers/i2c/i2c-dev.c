@@ -22,6 +22,8 @@
 
 /* The I2C_RDWR ioctl code is written by Kolja Waschk <waschk@telos.de> */
 
+/* I2C runtime speed configuration support by Microsoft 2018 */
+
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/fs.h>
@@ -297,6 +299,7 @@ static noinline int i2cdev_ioctl_rdwr(struct i2c_client *client,
 			    rdwr_pa[i].buf[0] < 1 ||
 			    rdwr_pa[i].len < rdwr_pa[i].buf[0] +
 					     I2C_SMBUS_BLOCK_MAX) {
+				i++;
 				res = -EINVAL;
 				break;
 			}
@@ -325,6 +328,12 @@ static noinline int i2cdev_ioctl_rdwr(struct i2c_client *client,
 	kfree(data_ptrs);
 	kfree(rdwr_pa);
 	return res;
+}
+
+static noinline int i2cdev_ioctl_speed(struct i2c_client *client,
+		unsigned long arg)
+{
+	return i2c_set_speed(client->adapter, (u32)arg);
 }
 
 static noinline int i2cdev_ioctl_smbus(struct i2c_client *client,
@@ -460,10 +469,19 @@ static long i2cdev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case I2C_SMBUS:
 		return i2cdev_ioctl_smbus(client, arg);
 
+	case I2C_SPEED:
+		return i2cdev_ioctl_speed(client, arg);
+
 	case I2C_RETRIES:
+		if (arg > INT_MAX)
+			return -EINVAL;
+
 		client->adapter->retries = arg;
 		break;
 	case I2C_TIMEOUT:
+		if (arg > INT_MAX)
+			return -EINVAL;
+
 		/* For historical reasons, user-space sets the timeout
 		 * value in units of 10 ms.
 		 */

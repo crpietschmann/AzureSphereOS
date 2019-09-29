@@ -1,0 +1,18 @@
+diff --git a/gdb/gdbserver/linux-low.c b/gdb/gdbserver/linux-low.c
+index b7c82d2..8222e83 100644
+--- a/gdb/gdbserver/linux-low.c
++++ b/gdb/gdbserver/linux-low.c
+@@ -969,8 +969,11 @@ linux_ptrace_fun ()
+ 	      (PTRACE_TYPE_ARG4) 0) < 0)
+     trace_start_error_with_name ("ptrace");
+ 
+-  if (setpgid (0, 0) < 0)
+-    trace_start_error_with_name ("setpgid");
++  /* Disabled setpgid(): GDB 8.0.1 silently failed on setpgid() and was
++     fixed in 8.2 however Azure Sphere security does not allow the call
++     to succeed */
++  //if (setpgid (0, 0) < 0)
++  //  trace_start_error_with_name ("setpgid");
+ 
+   /* If GDBserver is connected to gdb via stdio, redirect the inferior's
+      stdout to stderr so that inferior i/o doesn't corrupt the connection.

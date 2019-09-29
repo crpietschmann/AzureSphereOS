@@ -232,6 +232,8 @@ Code  Seq#(hex)	Include File		Comments
 'i'	00-3F	linux/i2o-dev.h		conflict!
 'i'	0B-1F	linux/ipmi.h		conflict!
 'i'	80-8F	linux/i8k.h
+'i' 90-9F	uapi/linux/iio/events.h
+'i' D0-EF	uapi/linux/iio/ioctl.h
 'j'	00-3F	linux/joystick.h
 'k'	00-0F	linux/spi/spidev.h	conflict!
 'k'	00-05	video/kyro.h		conflict!
@@ -339,4 +341,6 @@ Code  Seq#(hex)	Include File		Comments
 					<mailto:raph@8d.com>
 0xF6	all	LTTng			Linux Trace Toolkit Next Generation
 					<mailto:mathieu.desnoyers@efficios.com>
+0xF7	00-0F	uapi/linux/pwm.h
+0xF7	10	drivers/pwm/pwm-mt3620.c
 0xFD	all	linux/dm-ioctl.h

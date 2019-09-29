@@ -24,6 +24,8 @@
 /* With some changes from Kyösti Mälkki <kmalkki@cc.hut.fi> and
    Frodo Looijaard <frodol@dds.nl> */
 
+/* I2C runtime speed configuration support added by Microsoft 2018 */
+
 #ifndef _UAPI_LINUX_I2C_H
 #define _UAPI_LINUX_I2C_H
 

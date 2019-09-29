@@ -38,7 +38,7 @@
 #include <linux/spinlock_types.h>
 #include <linux/workqueue.h>
 #include <mt3620/mt3620_mailbox.h>
-
+#include "mailbox.h"
 #include "mt3620.h"
 
 #define DRIVER_NAME "mt3620-mailbox"
@@ -66,7 +66,8 @@ mt3620_mailbox_get_write_count(struct mt3620_mailbox_channel *channel)
 			     MBOX_FIFO_WRITE_COUNT_OFFSET);
 }
 
-static u32 mt3620_mailbox_channel_offset(struct mt3620_mailbox *mailbox, u32 channel_count)
+static u32 mt3620_mailbox_channel_offset(struct mt3620_mailbox *mailbox,
+					 u32 channel_count)
 {
 	switch (mailbox->version) {
 	case MBOX_VER_MT3620:
@@ -85,11 +86,23 @@ static u32 mt3620_mailbox_channel_offset(struct mt3620_mailbox *mailbox, u32 cha
 static struct mt3620_mailbox_channel *
 mbox_chan_to_mt3620_mailbox_channel(struct mbox_chan *chan)
 {
+	uintptr_t ptr;
 	if (!chan || !chan->con_priv) {
 		return NULL;
 	}
 
-	return (struct mt3620_mailbox_channel *)chan->con_priv;
+	ptr = ((uintptr_t)chan->con_priv) & ~MBOX_MT3620_CHAN_TYPE_MASK;
+
+	return (struct mt3620_mailbox_channel *)ptr;
+}
+
+int mbox_chan_to_mt3620_mailbox_channel_type(struct mbox_chan *chan)
+{
+	if (!chan) {
+		return 0;
+	}
+
+	return ((uintptr_t)chan->con_priv) & MBOX_MT3620_CHAN_TYPE_MASK;
 }
 
 ///
@@ -104,10 +117,12 @@ mbox_chan_to_mt3620_mailbox_channel(struct mbox_chan *chan)
 static int mt3620_mailbox_send_data(struct mbox_chan *chan, void *data)
 {
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
+
+	int channel_type = mbox_chan_to_mt3620_mailbox_channel_type(chan);
 
 	struct mt3620_mailbox_data *mailbox_data =
-	    (struct mt3620_mailbox_data *)data;
+		(struct mt3620_mailbox_data *)data;
 
 	if (!channel || !mailbox_data) {
 		return -EINVAL;
@@ -120,30 +135,36 @@ static int mt3620_mailbox_send_data(struct mbox_chan *chan, void *data)
 	dev_dbg(channel->dev, "Sending mailbox data at %#x",
 		mailbox_data->data);
 
-	// Is the mailbox full?
-	if (mt3620_mailbox_get_write_count(channel) ==
-	    channel->max_fifo_count) {
-		return -EBUSY;
+	if (channel_type == MBOX_MT3620_CHAN_TYPE_FIFO) {
+		// Is the mailbox full?
+		if (mt3620_mailbox_get_write_count(channel) ==
+		    channel->max_fifo_count) {
+			return -EBUSY;
+		}
+
+		if (mailbox_data->data != 0U) {
+			// Write data, then cmd
+			writel_relaxed(mailbox_data->data,
+				       channel->channel_base +
+					       MBOX_DATA_POST_OFFSET);
+			// Ensure we've written data first, otherwise the mailbox is going to
+			// load the wrong data
+			dma_wmb();
+		}
+
+		writel_relaxed(mailbox_data->cmd,
+			       channel->channel_base + MBOX_CMD_POST_OFFSET);
+		dev_dbg(channel->dev, "Mailbox count is now %u",
+			mt3620_mailbox_get_write_count(channel));
+	} else if (channel_type == MBOX_MT3620_CHAN_TYPE_USERINT) {
+		writel_relaxed(mailbox_data->cmd,
+			       channel->channel_base +
+				       MXBO_SW_TX_INT_PORT_OFFSET);
 	}
-
-	if (mailbox_data->data != 0U) {
-		// Write data, then cmd
-		writel_relaxed(mailbox_data->data,
-				channel->channel_base + MBOX_DATA_POST_OFFSET);
-		// Ensure we've written data first, otherwise the mailbox is going to
-		// load the wrong data
-		dma_wmb();
-	}
-
-	writel_relaxed(mailbox_data->cmd,
-		       channel->channel_base + MBOX_CMD_POST_OFFSET);
-
-	kfree(data);
-
-	dev_dbg(channel->dev, "Mailbox count is now %u",
-		mt3620_mailbox_get_write_count(channel));
 
 	spin_unlock(&channel->lock);
+
+	kfree(data);
 
 	return 0;
 }
@@ -156,19 +177,24 @@ static int mt3620_mailbox_send_data(struct mbox_chan *chan, void *data)
 static bool mt3620_mailbox_last_tx_done(struct mbox_chan *chan)
 {
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
 		return false;
 	}
 
-	dev_dbg(channel->dev, "Last TX done called");
+	if (mbox_chan_to_mt3620_mailbox_channel_type(chan) ==
+	    MBOX_MT3620_CHAN_TYPE_FIFO) {
+		dev_dbg(channel->dev, "Last TX done called");
 
-	// Return false if mailbox is full
-	if (mt3620_mailbox_get_write_count(channel) ==
-	    channel->max_fifo_count) {
-		return false;
-	} else {
+		// Return false if mailbox is full
+		if (mt3620_mailbox_get_write_count(channel) ==
+		    channel->max_fifo_count) {
+			return false;
+		} else {
+			return true;
+		}
+	} else { // MBOX_MT3620_CHAN_TYPE_USERINT
 		return true;
 	}
 }
@@ -181,14 +207,25 @@ static bool mt3620_mailbox_last_tx_done(struct mbox_chan *chan)
 static bool mt3620_mailbox_peek_data(struct mbox_chan *chan)
 {
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
 		return false;
 	}
 
-	// True if we have data to read
-	return mt3620_mailbox_get_read_count(channel) > 0 ? true : false;
+	if (mbox_chan_to_mt3620_mailbox_channel_type(chan) ==
+	    MBOX_MT3620_CHAN_TYPE_FIFO) {
+		// True if we have data to read
+		return mt3620_mailbox_get_read_count(channel) > 0 ? true :
+								    false;
+	} else { // MBOX_MT3620_CHAN_TYPE_USERINT
+		uint32_t user_int;
+
+		user_int = readl_relaxed(channel->channel_base +
+					 MBOX_SW_RX_INT_STS_OFFSET);
+
+		return user_int != 0;
+	}
 }
 
 ///
@@ -202,12 +239,8 @@ static void mt3620_mailbox_rx_interrupt_bottom_half(struct work_struct *work)
 {
 	struct mt3620_mailbox_data mailbox_data;
 	struct mt3620_mailbox_channel *channel =
-	    container_of(work, struct mt3620_mailbox_channel, read_work);
+		container_of(work, struct mt3620_mailbox_channel, read_work);
 	struct mbox_chan *chan = channel->mbox_chan;
-
-	if (!channel) {
-		return;
-	}
 
 	// One reader at a time
 	spin_lock(&channel->lock);
@@ -216,8 +249,8 @@ static void mt3620_mailbox_rx_interrupt_bottom_half(struct work_struct *work)
 		// M4 doesn't send anything through data
 		mailbox_data.data = 0;
 
-		mailbox_data.cmd =
-		    readl_relaxed(channel->channel_base + MBOX_CMD_POP_OFFSET);
+		mailbox_data.cmd = readl_relaxed(channel->channel_base +
+						 MBOX_CMD_POP_OFFSET);
 
 		dev_dbg(channel->dev, "New item read - command %x data %#x",
 			mailbox_data.cmd, mailbox_data.data);
@@ -239,10 +272,10 @@ static irqreturn_t mt3620_mailbox_rx_interrupt(int irq, void *p)
 {
 	struct mbox_chan *chan = (struct mbox_chan *)p;
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
-		return -EINVAL;
+		return IRQ_HANDLED;
 	}
 
 	// Reset interrupt flag
@@ -256,6 +289,65 @@ static irqreturn_t mt3620_mailbox_rx_interrupt(int irq, void *p)
 }
 
 ///
+/// IRQ interrupt handler for user interrupts
+///
+/// @irq - IRQ number
+/// @p - Pointer to mbox_chan object
+/// @returns - IRQ result status code
+static irqreturn_t mt3620_mailbox_user_interrupt(int irq, void *p)
+{
+	struct mbox_chan *chan = (struct mbox_chan *)p;
+	struct mt3620_mailbox_channel *channel =
+		mbox_chan_to_mt3620_mailbox_channel(chan);
+
+	if (!channel) {
+		return IRQ_HANDLED;
+	}
+
+	// Disable interrupts
+	writel_relaxed(0, channel->channel_base + MBOX_SW_RX_INT_EN_OFFSET);
+
+	// Call handler
+	schedule_work(&channel->user_work);
+
+	return IRQ_HANDLED;
+}
+
+///
+/// Bottom half IRQ interrupt handler for user interrupts
+///
+/// @data - Interupt data - mbox_chan pointer
+///
+/// Note - this is a work queue and not a tasklet so user callbacks can alloc
+/// memory
+static void mt3620_mailbox_user_interrupt_bottom_half(struct work_struct *work)
+{
+	struct mt3620_mailbox_data mailbox_data;
+	struct mt3620_mailbox_channel *channel =
+		container_of(work, struct mt3620_mailbox_channel, user_work);
+	struct mbox_chan *chan = channel->mbox_chan + 1;
+	uint32_t user_int;
+
+	// One reader at a time
+	spin_lock(&channel->lock);
+
+	user_int = readl_relaxed(channel->channel_base +
+				 MBOX_SW_RX_INT_STS_OFFSET);
+
+	// clear interrupts
+	writel_relaxed(user_int,
+		       channel->channel_base + MBOX_SW_RX_INT_STS_OFFSET);
+
+	// re-enable interrupts
+	writel_relaxed(0xFF, channel->channel_base + MBOX_SW_RX_INT_EN_OFFSET);
+
+	mailbox_data.cmd = user_int;
+	mbox_chan_received_data(chan, &mailbox_data);
+
+	spin_unlock(&channel->lock);
+}
+
+///
 /// Bottom half IRQ interrupt handler for when we're writing data
 ///
 /// @data - Interupt data - mbox_chan pointer
@@ -263,7 +355,7 @@ static void mt3620_mailbox_tx_interrupt_bottom_half(unsigned long data)
 {
 	struct mbox_chan *chan = (struct mbox_chan *)data;
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
 		return;
@@ -283,10 +375,10 @@ static irqreturn_t mt3620_mailbox_tx_interrupt(int irq, void *p)
 {
 	struct mbox_chan *chan = (struct mbox_chan *)p;
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
-		return -EINVAL;
+		return IRQ_HANDLED;
 	}
 
 	// Reset interrupt flag
@@ -307,39 +399,59 @@ static irqreturn_t mt3620_mailbox_tx_interrupt(int irq, void *p)
 static int mt3620_mailbox_startup(struct mbox_chan *chan)
 {
 	int ret = 0;
+	int channel_type;
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
 		return -EINVAL;
 	}
 
-	dev_dbg(channel->dev, "Mailbox startup for channel %u",
-		channel->channelId);
+	channel_type = mbox_chan_to_mt3620_mailbox_channel_type(chan);
 
-	// reset interrupt status flags
-	writel_relaxed(1 << MBOX_INT_TYPE_RD,
-		       channel->channel_base + MBOX_INT_STS_OFFSET);
-	writel_relaxed(1 << MBOX_INT_TYPE_WR,
-		       channel->channel_base + MBOX_INT_STS_OFFSET);
+	dev_dbg(channel->dev, "Mailbox startup for channel %u/%u",
+		channel->channelId, channel_type);
 
-	// Setup our interrupts
-	ret =
-	    devm_request_irq(channel->dev, channel->read_irq,
-			     mt3620_mailbox_rx_interrupt, 0, DRIVER_NAME, chan);
-	if (unlikely(ret)) {
-		dev_err(channel->dev,
-			"Failed to register RX mailbox interrupt: %d", ret);
-		return ret;
-	}
+	if (channel_type == MBOX_MT3620_CHAN_TYPE_FIFO) {
+		// reset interrupt status flags
+		writel_relaxed(1 << MBOX_INT_TYPE_RD,
+			       channel->channel_base + MBOX_INT_STS_OFFSET);
+		writel_relaxed(1 << MBOX_INT_TYPE_WR,
+			       channel->channel_base + MBOX_INT_STS_OFFSET);
 
-	ret =
-	    devm_request_irq(channel->dev, channel->write_irq,
-			     mt3620_mailbox_tx_interrupt, 0, DRIVER_NAME, chan);
-	if (unlikely(ret)) {
-		dev_err(channel->dev,
-			"Failed to register TX mailbox interrupt: %d", ret);
-		return ret;
+		// Setup our interrupts
+		ret = devm_request_irq(channel->dev, channel->read_irq,
+				       mt3620_mailbox_rx_interrupt, 0,
+				       DRIVER_NAME, chan);
+		if (unlikely(ret)) {
+			dev_err(channel->dev,
+				"Failed to register RX mailbox interrupt: %d",
+				ret);
+			return ret;
+		}
+
+		ret = devm_request_irq(channel->dev, channel->write_irq,
+				       mt3620_mailbox_tx_interrupt, 0,
+				       DRIVER_NAME, chan);
+		if (unlikely(ret)) {
+			dev_err(channel->dev,
+				"Failed to register TX mailbox interrupt: %d",
+				ret);
+			return ret;
+		}
+	} else if (channel_type == MBOX_MT3620_CHAN_TYPE_USERINT) {
+		ret = devm_request_irq(channel->dev, channel->user_irq,
+				       mt3620_mailbox_user_interrupt, 0,
+				       DRIVER_NAME, chan);
+		if (unlikely(ret)) {
+			dev_err(channel->dev,
+				"Failed to register user mailbox interrupt: %d",
+				ret);
+			return ret;
+		}
+
+		writel_relaxed(0xFF, channel->channel_base +
+					     MBOX_SW_RX_INT_EN_OFFSET);
 	}
 
 	return ret;
@@ -352,33 +464,42 @@ static int mt3620_mailbox_startup(struct mbox_chan *chan)
 /// @returns - 0 for success
 static void mt3620_mailbox_shutdown(struct mbox_chan *chan)
 {
+	int channel_type;
 	struct mt3620_mailbox_channel *channel =
-	    mbox_chan_to_mt3620_mailbox_channel(chan);
+		mbox_chan_to_mt3620_mailbox_channel(chan);
 
 	if (!channel) {
 		return;
 	}
 
-	dev_dbg(channel->dev, "Mailbox shutdown for channel %u",
-		channel->channelId);
+	channel_type = mbox_chan_to_mt3620_mailbox_channel_type(chan);
 
-	// Free IRQs
-	devm_free_irq(channel->dev, channel->read_irq, chan);
-	devm_free_irq(channel->dev, channel->write_irq, chan);
+	dev_dbg(channel->dev, "Mailbox shutdown for channel %u/%d",
+		channel->channelId, channel_type);
 
-	// reset interrupt status flags
-	writel_relaxed(1 << MBOX_INT_TYPE_RD,
-		       channel->channel_base + MBOX_INT_STS_OFFSET);
-	writel_relaxed(1 << MBOX_INT_TYPE_WR,
-		       channel->channel_base + MBOX_INT_STS_OFFSET);
+	if (channel_type == MBOX_MT3620_CHAN_TYPE_FIFO) {
+		// Free IRQs
+		devm_free_irq(channel->dev, channel->read_irq, chan);
+		devm_free_irq(channel->dev, channel->write_irq, chan);
+
+		// reset interrupt status flags
+		writel_relaxed(1 << MBOX_INT_TYPE_RD,
+			       channel->channel_base + MBOX_INT_STS_OFFSET);
+		writel_relaxed(1 << MBOX_INT_TYPE_WR,
+			       channel->channel_base + MBOX_INT_STS_OFFSET);
+	} else if (channel_type == MBOX_MT3620_CHAN_TYPE_USERINT) {
+		devm_free_irq(channel->dev, channel->user_irq, chan);
+		writel_relaxed(0, channel->channel_base +
+					  MBOX_SW_RX_INT_EN_OFFSET);
+	}
 }
 
 static struct mbox_chan_ops mt3620_mailbox_ops = {
-    .send_data = mt3620_mailbox_send_data,
-    .startup = mt3620_mailbox_startup,
-    .shutdown = mt3620_mailbox_shutdown,
-    .last_tx_done = mt3620_mailbox_last_tx_done,
-    .peek_data = mt3620_mailbox_peek_data,
+	.send_data = mt3620_mailbox_send_data,
+	.startup = mt3620_mailbox_startup,
+	.shutdown = mt3620_mailbox_shutdown,
+	.last_tx_done = mt3620_mailbox_last_tx_done,
+	.peek_data = mt3620_mailbox_peek_data,
 };
 
 ///
@@ -422,8 +543,12 @@ static int mt3620_mailbox_probe(struct platform_device *pdev)
 		max_fifo_count);
 
 	// Allocate memory for each channel
-	chans = devm_kzalloc(
-	    mailbox->dev, sizeof(*chans) * mailbox->channel_count, GFP_KERNEL);
+	// Allocate 2 "chan" for each physical mailbox channel
+	// (FIFO and user interrupt)
+	chans = devm_kzalloc(mailbox->dev,
+			     sizeof(*chans) * mailbox->channel_count *
+				     MBOX_MT3620_CHAN_PER_MAILBOX,
+			     GFP_KERNEL);
 	if (!chans)
 		return -ENOMEM;
 
@@ -439,10 +564,11 @@ static int mt3620_mailbox_probe(struct platform_device *pdev)
 		(u32)mailbox->mailbox_base);
 
 	// Read version out
-	mailbox->version = readl_relaxed(mailbox->mailbox_base + MAILBOX_REG_VERSION);
+	mailbox->version =
+		readl_relaxed(mailbox->mailbox_base + MAILBOX_REG_VERSION);
 	if (mailbox->version != MBOX_VER_MT3620) {
-		mailbox->version = readl_relaxed(mailbox->mailbox_base
-					+ 0x8000 + MAILBOX_REG_VERSION);
+		mailbox->version = readl_relaxed(mailbox->mailbox_base +
+						 0x8000 + MAILBOX_REG_VERSION);
 	}
 
 	dev_dbg(mailbox->dev, "Mailbox is hardware version %#x",
@@ -451,43 +577,68 @@ static int mt3620_mailbox_probe(struct platform_device *pdev)
 	// Build out our channel objects
 	for (i = 0; i < mailbox->channel_count; i++) {
 		channel =
-		    devm_kzalloc(&pdev->dev, sizeof(*channel), GFP_KERNEL);
+			devm_kzalloc(&pdev->dev, sizeof(*channel), GFP_KERNEL);
 
 		if (!channel)
 			return -ENOMEM;
 
 		channel->channel_base =
-		    mailbox->mailbox_base + mt3620_mailbox_channel_offset(mailbox, i);
+			mailbox->mailbox_base +
+			mt3620_mailbox_channel_offset(mailbox, i);
 		channel->channelId = i;
 		channel->dev = mailbox->dev;
 		channel->max_fifo_count = max_fifo_count;
-		channel->mbox_chan = &chans[i];
-		channel->read_irq = platform_get_irq(pdev, (2 * i));
-		channel->write_irq = platform_get_irq(pdev, (2 * i) + 1);
+		channel->mbox_chan = &chans[i * MBOX_MT3620_CHAN_PER_MAILBOX];
+		channel->read_irq = platform_get_irq(pdev, (3 * i));
+		channel->write_irq = platform_get_irq(pdev, (3 * i) + 1);
+		channel->user_irq = platform_get_irq(pdev, (3 * i) + 2);
 		channel->version = mailbox->version;
 		INIT_WORK(&channel->read_work,
 			  mt3620_mailbox_rx_interrupt_bottom_half);
-		tasklet_init(&channel->write_tasklet,
-			     mt3620_mailbox_tx_interrupt_bottom_half,
-			     (unsigned long)&chans[i]);
+		tasklet_init(
+			&channel->write_tasklet,
+			mt3620_mailbox_tx_interrupt_bottom_half,
+			(unsigned long)&chans[i * MBOX_MT3620_CHAN_PER_MAILBOX]);
+		INIT_WORK(&channel->user_work,
+			  mt3620_mailbox_user_interrupt_bottom_half);
 		spin_lock_init(&channel->lock);
 
 		// For later reference
-		chans[i].con_priv = channel;
+		chans[i * MBOX_MT3620_CHAN_PER_MAILBOX +
+		      MBOX_MT3620_CHAN_TYPE_FIFO]
+			.con_priv = (void *)(((uintptr_t)channel) |
+					     MBOX_MT3620_CHAN_TYPE_FIFO);
+		chans[i * MBOX_MT3620_CHAN_PER_MAILBOX +
+		      MBOX_MT3620_CHAN_TYPE_USERINT]
+			.con_priv = (void *)(((uintptr_t)channel) |
+					     MBOX_MT3620_CHAN_TYPE_USERINT);
 	}
 
 	mailbox->controller.dev = mailbox->dev;
-	mailbox->controller.num_chans = mailbox->channel_count;
+	mailbox->controller.num_chans =
+		mailbox->channel_count * MBOX_MT3620_CHAN_PER_MAILBOX;
 	mailbox->controller.chans = chans;
 	mailbox->controller.ops = &mt3620_mailbox_ops;
 
-	// We use interrupt based completion indicators
-	mailbox->controller.txdone_irq = true;
+	// We use interrupt based completion indicators for the FIFO channels,
+	// but not for the USERINT channels. Unfortunately the mailbox subsystem
+	// doesn't support txdone method selection per channel, only per controller.
+	// We work around by first requesting TXDONE_BY_POLL (which will initialize
+	// the hrtimer for polling), but bait-and-switch back by setting the per-
+	// channel method to IRQ for the FIFO channels.
+	mailbox->controller.txdone_poll = true;
 
 	ret = mbox_controller_register(&mailbox->controller);
 	if (ret) {
 		dev_err(&pdev->dev, "Register mailbox failed\n");
 		goto err;
+	}
+
+	// Set main FIFO channels to TX done via IRQ
+	for (i = 0; i < mailbox->channel_count; i++) {
+		chans[i * MBOX_MT3620_CHAN_PER_MAILBOX +
+		      MBOX_MT3620_CHAN_TYPE_FIFO]
+			.txdone_method = TXDONE_BY_IRQ;
 	}
 
 	dev_dbg(mailbox->dev, "Mailbox setup completed");
@@ -516,18 +667,20 @@ static int mt3620_mailbox_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id mt3620_mailbox_match[] = {
-    {.compatible = "mediatek,mt3620-mailbox"}, {/* Sentinel */},
+	{ .compatible = "mediatek,mt3620-mailbox" },
+	{ /* Sentinel */ },
 };
 
 MODULE_DEVICE_TABLE(of, mt3620_mailbox_match);
 
 static struct platform_driver mt3620_mailbox_driver = {
-    .probe = mt3620_mailbox_probe,
-    .remove = mt3620_mailbox_remove,
-    .driver =
-	{
-	    .name = DRIVER_NAME, .of_match_table = mt3620_mailbox_match,
-	},
+	.probe = mt3620_mailbox_probe,
+	.remove = mt3620_mailbox_remove,
+	.driver =
+		{
+			.name = DRIVER_NAME,
+			.of_match_table = mt3620_mailbox_match,
+		},
 };
 
 module_platform_driver(mt3620_mailbox_driver);

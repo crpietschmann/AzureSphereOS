@@ -850,8 +850,6 @@ struct mt3620_hif_management_info {
 	enum mt3620_hif_response_type response_type;
 	// Our response data
 	union mt3620_hif_response_data response_data;
-	// Has the response been processed yet?
-	bool response_processed;
 	// List pointer
 	struct list_head list;
 	// Sequence number - used to execute callbacks

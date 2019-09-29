@@ -206,9 +206,11 @@ int of_property_notify(int action, struct device_node *np,
 {
 	struct of_reconfig_data pr;
 
+#ifdef CONFIG_SYSFS
 	/* only call notifiers if the node is attached */
 	if (!of_node_is_attached(np))
 		return 0;
+#endif
 
 	pr.dn = np;
 	pr.prop = prop;

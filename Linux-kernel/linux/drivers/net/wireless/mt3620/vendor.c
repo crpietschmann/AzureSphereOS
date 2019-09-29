@@ -352,12 +352,24 @@ static int mt3620_vendor_cmds_hqa_enter(struct wiphy *wiphy,
 	}
 
 	/* Check if any interfaces are connected. Fail out if true */
-	if ((wifi_hw->sta_vif && wifi_hw->sta_vif->state != DISCONNECTED) ||
-	    (wifi_hw->ap_vif && wifi_hw->ap_vif->state != DISCONNECTED) ||
-	    (wifi_hw->ibss_vif && wifi_hw->ibss_vif->state != DISCONNECTED)) {
+	if (wifi_hw->sta_vif && wifi_hw->sta_vif->state != DISCONNECTED) {
+		dev_err(wifi_hw->wifi->dev, "wifi_hw->sta_vif->state %d", wifi_hw->sta_vif->state);
+		ret = -EBUSY;
+	}
+	
+	if (wifi_hw->ap_vif && wifi_hw->ap_vif->state != DISCONNECTED) {
+		dev_err(wifi_hw->wifi->dev, "wifi_hw->ap_vif->state %d", wifi_hw->ap_vif->state);
+		ret = -EBUSY;
+	}
+
+	if (wifi_hw->ibss_vif && wifi_hw->ibss_vif->state != DISCONNECTED) {
+		dev_err(wifi_hw->wifi->dev, "wifi_hw->ibss_vif->state %d", wifi_hw->ibss_vif->state);
+		ret = -EBUSY;
+	}
+	
+	if (ret != SUCCESS) {
 		dev_err(wifi_hw->wifi->dev,
 			"Wifi must be disconnected to enter test mode");
-		ret = -EBUSY;
 		goto exit;
 	}
 
@@ -1719,7 +1731,7 @@ static int mt3620_n9_WDT_trigger(struct wiphy *wiphy, struct wireless_dev *wdev,
 	//reset the mac flag
 	g_wifi_hw->sta_vif->is_mac_set = false;
 	//send the disconnect to upper layer
-	mt3620_wifi_disconnect_if_connected(g_wifi_hw->sta_vif);
+	mt3620_wifi_disconnect_cfg80211(g_wifi_hw->sta_vif, true);
 
 	//we can also stop the cfg layer but it can also stop the vend command interface
 	//so we will add this feature when we mbox is up and we dont need the vend cmd interface

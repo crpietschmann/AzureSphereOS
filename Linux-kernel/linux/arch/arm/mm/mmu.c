@@ -6,6 +6,9 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * Modifications:
+ *  - Microsoft Feb 2019 - Disable earlycon around fixmap shutdown.
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -17,6 +20,7 @@
 #include <linux/fs.h>
 #include <linux/vmalloc.h>
 #include <linux/sizes.h>
+#include <linux/serial_core.h>
 
 #include <asm/cp15.h>
 #include <asm/cputype.h>
@@ -1585,9 +1589,16 @@ void __init early_paging_init(const struct machine_desc *mdesc)
 
 static void __init early_fixmap_shutdown(void)
 {
+	short conflags;
 	int i;
 	unsigned long va = fix_to_virt(__end_of_permanent_fixed_addresses - 1);
 
+	/*
+	 * Disable the early console around this function since a memory-mapped
+	 * UART could be unavailable during the call to create_mapping, which
+	 * might call printk if memblock_debug == 1.
+	 */
+	conflags = disable_earlycon();
 	pte_offset_fixmap = pte_offset_late_fixmap;
 	pmd_clear(fixmap_pmd(va));
 	local_flush_tlb_kernel_page(va);
@@ -1610,6 +1621,8 @@ static void __init early_fixmap_shutdown(void)
 
 		create_mapping(&map);
 	}
+
+	restore_earlycon(conflags);
 }
 
 /*

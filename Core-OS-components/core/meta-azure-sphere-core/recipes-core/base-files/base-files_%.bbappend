@@ -2,6 +2,7 @@
 FILESEXTRAPATHS_prepend := "${THISDIR}/base-files:"
 
 # Remove folders not used in Azure Sphere
+dirs555_remove = "/sys"
 dirs755_remove = "/boot"
 dirs755_remove = "${base_bindir}"
 dirs755_remove = "${base_sbindir}"

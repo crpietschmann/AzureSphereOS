@@ -12,4 +12,17 @@ sys-log:*:12:
 tmp-admin:*:13:
 rtc:*:14:
 net-config:*:15:
+time-sync-config:*:16:
+dhcp-service:*:17:
+sntp-service:*:18:
+enterprise-wifi-config:*:19:
 nogroup:*:999:
+ipc-appman-reboot:*:500:
+ipc-appman-sideload:*:501:
+ipc-appman-cloudload:*:502:
+ipc-appman-appstart:*:503:
+ipc-appman-appstop:*:504:
+ipc-appman-appdelete:*:505:
+ipc-appman-appdebug:*:506:
+ipc-group-certstore:*:700:
+ipc-group-softwareupdatedeferral:*:800:

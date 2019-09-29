@@ -324,6 +324,7 @@ static void yurex_disconnect(struct usb_interface *interface)
 	usb_deregister_dev(interface, &yurex_class);
 
 	/* prevent more I/O from starting */
+	usb_poison_urb(dev->urb);
 	mutex_lock(&dev->io_mutex);
 	dev->interface = NULL;
 	mutex_unlock(&dev->io_mutex);
@@ -422,6 +423,9 @@ static ssize_t yurex_read(struct file *file, char __user *buffer, size_t count,
 	len = snprintf(in_buffer, 20, "%lld\n", dev->bbu);
 	spin_unlock_irqrestore(&dev->lock, flags);
 	mutex_unlock(&dev->io_mutex);
+
+	if (WARN_ON_ONCE(len >= sizeof(in_buffer)))
+		return -EIO;
 
 	return simple_read_from_buffer(buffer, count, ppos, in_buffer, len);
 }

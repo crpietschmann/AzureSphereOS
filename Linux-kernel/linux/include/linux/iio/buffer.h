@@ -133,8 +133,56 @@ int iio_update_buffers(struct iio_dev *indio_dev,
  **/
 void iio_buffer_init(struct iio_buffer *buffer);
 
+
+/**
+ * Query if the bit is set in the scan mask
+ * @indio_dev: the IIO device.
+ * @buffer: the IIO buffer
+ * @bit: the ordinal position in the scan mask to query
+ */
 int iio_scan_mask_query(struct iio_dev *indio_dev,
 			struct iio_buffer *buffer, int bit);
+
+/**
+ * Set the bit in the scan mask. This is equivalent to writing "1" 
+ * to the channel enable device attribute in sysfs. Used by IIO_IOCTL 
+ * to control devices when sysfs is disabled.
+ * @indio_dev: the IIO device.
+ * @buffer: the IIO buffer
+ * @bit: the ordinal position in the scan mask to set
+ */
+int iio_scan_mask_set(struct iio_dev *indio_dev,
+		      struct iio_buffer *buffer, int bit);
+
+/**
+ * Clear the bit in the scan mask. This is equivalent
+ * to writing "0" to the channel enable device attribute in
+ * sysfs. Used by IIO_IOCTL to control devices when sysfs is
+ * disabled.
+ * @indio_dev: the IIO device.
+ * @bit: the ordinal position in the scan mask to clear
+ */
+int iio_scan_mask_clear(struct iio_buffer *buffer, int bit);
+
+/**
+ * Enables and disables the buffer. This is equivalent to reading or
+ * writing to the buffer "enable" attribute int the buffer directory
+ * of sysfs. This is used by IIO_IOCTL to control devices when sysfs
+ * is disabled.
+ * @indio_dev: the IIO device.
+ * @indio_dev: the IIO buffer.
+ * @enable: 0 to disable, anything else to enable.
+ *
+ */
+int iio_buffer_set_enable(struct iio_dev *indio_dev, bool enable);
+bool iio_buffer_get_enable(struct iio_dev *indio_dev);
+
+
+int iio_buffer_set_length(struct iio_dev *indio_dev, unsigned int len);
+unsigned int iio_buffer_get_length(struct iio_dev *indio_dev);
+
+int iio_buffer_set_watermark(struct iio_dev *indio_dev, unsigned int len);
+unsigned int iio_buffer_get_watermark(struct iio_dev *indio_dev);
 
 /**
  * iio_push_to_buffers() - push to a registered buffer.
@@ -142,6 +190,7 @@ int iio_scan_mask_query(struct iio_dev *indio_dev,
  * @data:		Full scan.
  */
 int iio_push_to_buffers(struct iio_dev *indio_dev, const void *data);
+
 
 /*
  * iio_push_to_buffers_with_timestamp() - push data and timestamp to buffers

@@ -44,7 +44,6 @@
 #define RTC_BIT_EVENT_TIMER		0x0020
 #define RTC_BIT_EVENT_ALARM		0x0010
 
-
 /**
  * struct mt3620_vendor_data - per-vendor variations
  * @ops: the vendor-specific operations used on this silicon version
@@ -69,10 +68,44 @@ static int mt3620_alarm_irq_enable(struct device *dev,
 	return -1;
 }
 
+static int mt3620_rtc_set_time(struct device *dev, struct rtc_time *time)
+{
+	struct azure_sphere_rtc_time as_time;
+
+	memset(&as_time, 0, sizeof(struct azure_sphere_rtc_time));
+
+	/* Range 1900 to 1999 is invalid */
+	if (time->tm_year < 100) {
+		return -EINVAL;
+	}
+	/**
+	 * RTC's epoch is initialized to year reference 2000 and Unix to 1900,
+	 * subtract 100 when writing to rtc.
+	 */
+	time->tm_year -= 100;
+	/**
+	 * RTC's month reference ranges from 1~12 and Unix from 0~11,
+	 * add 1 when writing to rtc.
+	 */
+	time->tm_mon += 1;
+
+	as_time.time_sec   = time->tm_sec;
+	as_time.time_min   = time->tm_min;
+	as_time.time_hour  = time->tm_hour;
+	as_time.time_mday  = time->tm_mday;
+	as_time.time_mon   = time->tm_mon;
+	as_time.time_year  = time->tm_year;
+	as_time.time_wday  = time->tm_wday;
+	as_time.time_yday  = time->tm_yday;
+	as_time.time_isdst = time->tm_isdst;
+
+	return azure_sphere_set_rtc_current_time(&as_time);
+}
 
 static int mt3620_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct mt3620_local *ldata = dev_get_drvdata(dev);
+	int ret = 0;
 
 	tm->tm_year = readl(ldata->base + REG_RTC_TC_YEAR);
 	tm->tm_mon  = readl(ldata->base + REG_RTC_TC_MON);
@@ -81,33 +114,28 @@ static int mt3620_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	tm->tm_hour = readl(ldata->base + REG_RTC_TC_HOUR);
 	tm->tm_min  = readl(ldata->base + REG_RTC_TC_MIN);
 	tm->tm_sec  = readl(ldata->base + REG_RTC_TC_SEC);
-	
-	if (tm->tm_year < 70){
-		tm->tm_year += 100;
-		tm->tm_mon -= 1;
+
+	/* This fix is needed one-time-only as we transition from zero-based month to
+	 * one-based month and re-base year reference from 1900 to 2000. This ensures we read correct
+	 * RTC year/month offsets before and after transition.
+	 */
+	if (tm->tm_year > 100) {
+		/* Add 1 to month, subtract 100 from year and push to RTC */
+		ret = mt3620_rtc_set_time(dev, tm);
 	}
+	/**
+	 * RTC's epoch is initialized to year reference 2000 and Unix to 1900,
+	 * add 100 when reading from rtc.
+	 */
+	tm->tm_year += 100;
+	/**
+	 * RTC's month reference ranges from 1~12 and Unix from 0~11,
+	 * subtract 1 when reading from rtc. It is safe to subtract
+	 * unconditionally as the reset value of RTC_TC_MON is 1.
+	 */
+	tm->tm_mon -= 1;
 
-	return 0;
-}
-
-
-static int mt3620_rtc_set_time(struct device *dev, struct rtc_time *time)
-{
-	struct azure_sphere_rtc_time as_time;
-
-	memset(&as_time, 0, sizeof(struct azure_sphere_rtc_time));
-
-	as_time.time_sec   = time->tm_sec;
-    as_time.time_min   = time->tm_min;
-    as_time.time_hour  = time->tm_hour;
-    as_time.time_mday  = time->tm_mday;
-    as_time.time_mon   = time->tm_mon;
-    as_time.time_year  = time->tm_year;
-    as_time.time_wday  = time->tm_wday;
-    as_time.time_yday  = time->tm_yday;
-    as_time.time_isdst = time->tm_isdst;
-
-	return azure_sphere_set_rtc_current_time(&as_time);
+	return ret;
 }
 
 
@@ -125,10 +153,17 @@ static int mt3620_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	alarm->pending = 0;
 	alarm->enabled = readl(ldata->base + REG_RTC_AL_CTL) & RTC_BIT_ALMEN;
 
-	if (alarm->time.tm_year < 70){
-		alarm->time.tm_year += 100;
-		alarm->time.tm_mon -= 1;
-	}
+	/**
+	 * RTC's epoch is initialized to year reference 2000 and Unix to 1900,
+	 * add 100 when reading from rtc.
+	 */
+	alarm->time.tm_year += 100;
+	/**
+	 * RTC's month reference ranges from 1~12 and Unix from 0~11,
+	 * subtract 1 when reading from rtc. It is safe to subtract
+	 * unconditionally as the reset value of RTC_AL_MON is 1.
+	 */
+	alarm->time.tm_mon -= 1;
 
 	return 0;
 }
@@ -139,15 +174,30 @@ static int mt3620_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 
 	memset(&as_alarm, 0, sizeof(struct azure_sphere_rtc_wake_alarm));
 
+	/* Range 1900 to 1999 is invalid */
+	if (alarm->time.tm_year < 100) {
+		return -EINVAL;
+	}
+	/**
+	 * RTC's epoch is initialized to year reference 2000 and Unix to 1900,
+	 * subtract 100 when writing to rtc.
+	 */
+	alarm->time.tm_year -= 100;
+	/**
+	 * RTC's month reference ranges from 1~12 and Unix from 0~11,
+	 * add 1 when writing to rtc.
+	 */
+	alarm->time.tm_mon += 1;
+
 	as_alarm.time.time_sec   = alarm->time.tm_sec;
-    as_alarm.time.time_min   = alarm->time.tm_min;
-    as_alarm.time.time_hour  = alarm->time.tm_hour;
-    as_alarm.time.time_mday  = alarm->time.tm_mday;
-    as_alarm.time.time_mon   = alarm->time.tm_mon;
-    as_alarm.time.time_year  = alarm->time.tm_year;
-    as_alarm.time.time_wday  = alarm->time.tm_wday;
-    as_alarm.time.time_yday  = alarm->time.tm_yday;
-    as_alarm.time.time_isdst = alarm->time.tm_isdst;
+	as_alarm.time.time_min   = alarm->time.tm_min;
+	as_alarm.time.time_hour  = alarm->time.tm_hour;
+	as_alarm.time.time_mday  = alarm->time.tm_mday;
+	as_alarm.time.time_mon   = alarm->time.tm_mon;
+	as_alarm.time.time_year  = alarm->time.tm_year;
+	as_alarm.time.time_wday  = alarm->time.tm_wday;
+	as_alarm.time.time_yday  = alarm->time.tm_yday;
+	as_alarm.time.time_isdst = alarm->time.tm_isdst;
 	as_alarm.enabled = alarm->enabled;
 	as_alarm.pending = alarm->pending;
 
@@ -167,7 +217,7 @@ static int mt3620_rtc_remove(struct platform_device *pdev)
 {
 	struct mt3620_local *ldata = platform_get_drvdata(pdev);
 
-	iounmap(ldata->base);
+	devm_iounmap(&pdev->dev, ldata->base);
 	devm_kfree(&pdev->dev, ldata);
 
 	return 0;
@@ -199,8 +249,8 @@ static int mt3620_rtc_probe(struct platform_device *pdev)
 
 	ldata->dev = &pdev->dev;
 	platform_set_drvdata(pdev, ldata);
-	
- 	ldata->rtc = devm_rtc_device_register(&pdev->dev, "mt3620-rtc",
+
+	ldata->rtc = devm_rtc_device_register(&pdev->dev, "mt3620-rtc",
 					 &mt3620_rtc_ops, THIS_MODULE);
 
 	if (IS_ERR(ldata->rtc)) {
@@ -224,7 +274,7 @@ out:
 static SIMPLE_DEV_PM_OPS(mt3620_pm_ops, null, null);
 
 static const struct of_device_id mt3620_rtc_match[] = {
-    {.compatible = "mediatek,mt3620-rtc"},
+	{.compatible = "mediatek,mt3620-rtc"},
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mt3620_rtc_match);
@@ -234,7 +284,7 @@ static struct platform_driver mt3620_rtc_driver = {
 	.remove	= mt3620_rtc_remove,
 	.driver	= {
 		.name	= "mt3620-rtc",
-        .pm = &mt3620_pm_ops,
+		.pm = &mt3620_pm_ops,
 		.of_match_table	= mt3620_rtc_match,
 	},
 };

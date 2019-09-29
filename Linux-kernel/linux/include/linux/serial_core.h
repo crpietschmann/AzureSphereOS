@@ -16,6 +16,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * Modifications:
+ *  - Microsoft Feb 2019 - Add facility to disable and restore early_con.
  */
 #ifndef LINUX_SERIAL_CORE_H
 #define LINUX_SERIAL_CORE_H
@@ -382,9 +385,13 @@ extern int of_setup_earlycon(const struct earlycon_id *match,
 #ifdef CONFIG_SERIAL_EARLYCON
 extern bool earlycon_init_is_deferred __initdata;
 int setup_earlycon(char *buf);
+short disable_earlycon(void);
+void restore_earlycon(short enabled);
 #else
 static const bool earlycon_init_is_deferred;
 static inline int setup_earlycon(char *buf) { return 0; }
+static inline short disable_earlycon(void) { return 0; }
+static inline void restore_earlycon(short enabled) { return; }
 #endif
 
 struct uart_port *uart_get_console(struct uart_port *ports, int nr,

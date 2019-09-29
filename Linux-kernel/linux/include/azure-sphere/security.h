@@ -22,30 +22,14 @@
 #define _AZURE_SPHERE_SECURITY_H
 #include <linux/types.h>
 #include <uapi/linux/azure-sphere/security_monitor.h>
+#include <uapi/linux/azure-sphere/security.h>
+
+struct task_struct;
 
 // Check if the caller is holding a given azure sphere capability
 bool azure_sphere_capable(azure_sphere_capability_t cap);
 
-// Newer kernels have a good UUID framework - switch to that
-// when available
-struct azure_sphere_guid {
-    u32 data1;
-    u16 data2;
-    u16 data3;
-    u8 data4[8];
-};
-
-// exposed through /proc/<pid>/attr/exec
-struct azure_sphere_task_cred {
-    union {
-        u8     raw_bytes[16];
-        struct azure_sphere_guid guid;
-    } component_id;
-    char   daa_tenant_id[64];
-    bool   is_app_man : 1;
-    bool   job_control_allowed : 1;
-    unsigned int : 0;
-    azure_sphere_capability_t capabilities;
-};
+// Get component id of p
+bool azure_sphere_get_component_id(struct azure_sphere_guid *component_id, struct task_struct *p);
 
 #endif

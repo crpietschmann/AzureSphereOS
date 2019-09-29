@@ -1,0 +1,8 @@
+# Azure Sphere IO Communication
+#
+
+config AZSPIO
+	tristate "AZSPIO"
+	depends on AZURE_SPHERE
+	---help---
+	  Azure Sphere IO Communication

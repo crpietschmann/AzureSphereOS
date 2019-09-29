@@ -4,25 +4,12 @@
 #include <linux/err.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <uapi/linux/pwm.h>
 
 struct pwm_capture;
 struct seq_file;
 
 struct pwm_chip;
-
-/**
- * enum pwm_polarity - polarity of a PWM signal
- * @PWM_POLARITY_NORMAL: a high signal for the duration of the duty-
- * cycle, followed by a low signal for the remainder of the pulse
- * period
- * @PWM_POLARITY_INVERSED: a low signal for the duration of the duty-
- * cycle, followed by a high signal for the remainder of the pulse
- * period
- */
-enum pwm_polarity {
-	PWM_POLARITY_NORMAL,
-	PWM_POLARITY_INVERSED,
-};
 
 /**
  * struct pwm_args - board-dependent PWM arguments
@@ -45,20 +32,7 @@ struct pwm_args {
 enum {
 	PWMF_REQUESTED = 1 << 0,
 	PWMF_EXPORTED = 1 << 1,
-};
-
-/*
- * struct pwm_state - state of a PWM channel
- * @period: PWM period (in nanoseconds)
- * @duty_cycle: PWM duty cycle (in nanoseconds)
- * @polarity: PWM polarity
- * @enabled: PWM enabled status
- */
-struct pwm_state {
-	unsigned int period;
-	unsigned int duty_cycle;
-	enum pwm_polarity polarity;
-	bool enabled;
+	PWMF_CHARDEV_EXPORTED = 1 << 2,
 };
 
 /**
@@ -93,6 +67,37 @@ static inline void pwm_get_state(const struct pwm_device *pwm,
 				 struct pwm_state *state)
 {
 	*state = pwm->state;
+}
+
+/**
+ * pwm_get_state_extended() - retrieve the current PWM state including
+ * extended_state in caller-owned memory
+ * @pwm: PWM device
+ * @state: state to fill with the current PWM state (must be initialized)
+ * extended_state will be set to NULL if no extended_state currently exists
+ */
+static inline int pwm_get_state_extended(const struct pwm_device *pwm,
+				 struct pwm_state *state)
+{
+	void *extended_state = state->extended_state;
+	size_t extended_state_size = state->extended_state_size;
+
+	pwm_get_state(pwm, state);
+
+	state->extended_state = extended_state;
+	state->extended_state_size = extended_state_size;
+
+	if (!pwm->state.extended_state) {
+		state->extended_state = NULL;
+		state->extended_state_size = 0;
+	} else if (state->extended_state) {
+		if (state->extended_state_size == pwm->state.extended_state_size)
+			memcpy(state->extended_state, pwm->state.extended_state,
+				state->extended_state_size);
+		else
+			return -EINVAL;
+	}
+	return 0;
 }
 
 static inline bool pwm_is_enabled(const struct pwm_device *pwm)
@@ -253,6 +258,8 @@ pwm_set_relative_duty_cycle(struct pwm_state *state, unsigned int duty_cycle,
  * @get_state: get the current PWM state. This function is only
  *	       called once per PWM device when the PWM chip is
  *	       registered.
+ * @ioctl: optional hook for driver-specific IOCTLs from the
+ *         PWM character device
  * @dbg_show: optional routine to show contents in debugfs
  * @owner: helps prevent removal of modules exporting active PWMs
  */
@@ -271,6 +278,8 @@ struct pwm_ops {
 		     struct pwm_state *state);
 	void (*get_state)(struct pwm_chip *chip, struct pwm_device *pwm,
 			  struct pwm_state *state);
+	long (*ioctl)(struct pwm_chip *chip, unsigned int cmd,
+			  unsigned long arg);
 #ifdef CONFIG_DEBUG_FS
 	void (*dbg_show)(struct pwm_chip *chip, struct seq_file *s);
 #endif
@@ -641,7 +650,6 @@ static inline void pwm_remove_table(struct pwm_lookup *table, size_t num)
 #ifdef CONFIG_PWM_SYSFS
 void pwmchip_sysfs_export(struct pwm_chip *chip);
 void pwmchip_sysfs_unexport(struct pwm_chip *chip);
-void pwmchip_sysfs_unexport_children(struct pwm_chip *chip);
 #else
 static inline void pwmchip_sysfs_export(struct pwm_chip *chip)
 {
@@ -650,10 +658,24 @@ static inline void pwmchip_sysfs_export(struct pwm_chip *chip)
 static inline void pwmchip_sysfs_unexport(struct pwm_chip *chip)
 {
 }
+#endif /* CONFIG_PWM_SYSFS */
 
-static inline void pwmchip_sysfs_unexport_children(struct pwm_chip *chip)
+#ifdef CONFIG_PWM_CHARDEV
+void pwmchip_chardev_export(struct pwm_chip *chip);
+void pwmchip_chardev_unexport(struct pwm_chip *chip);
+void pwmchip_chardev_unexport_children(struct pwm_chip *chip);
+#else
+static inline void pwmchip_chardev_export(struct pwm_chip *chip)
 {
 }
-#endif /* CONFIG_PWM_SYSFS */
+
+static inline void pwmchip_chardev_unexport(struct pwm_chip *chip)
+{
+}
+
+static inline void pwmchip_chardev_unexport_children(struct pwm_chip *chip)
+{
+}
+#endif /* CONFIG_PWM_CHARDEV */
 
 #endif /* __LINUX_PWM_H */

@@ -443,6 +443,10 @@ exit:
 /// @buffer_idx - index
 static void pluton_release_buffer_by_idx(u8 buffer_idx) 
 {
+	if (buffer_idx >= M4_MAX_EVENT_BUFFERS) {
+		return;
+	}
+
 	// Acquire lock
 	spin_lock(&g_state.relay_lock);
 
@@ -465,6 +469,10 @@ exit:
 /// @returns - message buffer
 static struct pluton_remoteapi_message *pluton_get_message_by_buffer_idx(u8 buffer_idx, u16 *data_size) 
 {
+	if (buffer_idx >= M4_MAX_EVENT_BUFFERS) {
+		return NULL;
+	}
+
 	if (data_size != NULL) {
 		*data_size = g_state.ring_buffers->buffers[buffer_idx].length;
 	}
@@ -538,7 +546,12 @@ static void pluton_remote_api_process_response(union pluton_remoteapi_command_en
 	void *data = NULL;
 	u32 data_size = 0;
 	
+	// Get a message buffer
 	message = pluton_get_message_by_buffer_idx(cmd.info.buffer_index, &buffer_length);
+	if (message == NULL) {
+		dev_err(g_state.provider->dev, "Invalid message buffer index");
+		goto exit;
+	}
 
 	// Verify size
 	if (buffer_length < sizeof(struct pluton_remoteapi_message) 
@@ -719,7 +732,15 @@ static int pluton_remote_api_send_command_to_m4(
 	header.message_size = ALIGN(data_size, 4);
 
 	payload_size = sizeof(struct pluton_remoteapi_message) + header.message_size;
-	
+
+	// Make sure we didn't wrap around in any of the calculations
+	if ((header.message_size < data_size) ||
+		(payload_size < header.message_size)) {
+		dev_err(g_state.provider->dev, "Invalid M4 packet size");
+		ret = -ENOMEM;
+		goto exit;
+	}
+
 	// Copy header + data into a final buffer
 	buffer = pluton_get_tx_buffer();
 
@@ -731,9 +752,10 @@ static int pluton_remote_api_send_command_to_m4(
 	// Verify size
 	if (buffer->length < payload_size) {
 		dev_err(g_state.provider->dev, "Invalid M4 packet size");
-		// rcho debug line
+		// echo debug line
 		dev_err(g_state.provider->dev, "M4 packet size %d larger than ring buf length %d", payload_size, buffer->length);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto exit;
 	}
 
 	memcpy(buffer->a7_buffer, &header, sizeof(struct pluton_remoteapi_message));

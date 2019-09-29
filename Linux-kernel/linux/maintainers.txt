@@ -1,0 +1,67 @@
+#
+# Linux kernel (Azure Sphere fork)
+#
+# The code in this repo is primarily unmodified code from the upstream Linux kernel,
+# and thus maintained by the people who maintain that.  This file identifies
+# members of the Azure Sphere engineering team who maintain code unique to the
+# Azure Sphere fork of the kernel.
+#
+
+# This default catch-all rule makes sure that changes to this repo coming
+# from the Azure Sphere engineering team are reviewed by someone in the
+# Device Software group.  Over time, we'd ideally like this rule to
+# match as few changes as possible to code that is unique to the Azure Sphere
+# fork of the Linux kernel.
+/*                                              [4x4]\Device Software
+
+# SoC-specific data and code unique to the Azure Sphere fork of the kernel
+# are maintained by the HAL team.
+/arch/arm/configs/mt3620_defconfig              [4x4]\HAL
+/arch/arm/mach-mt3620/*                         [4x4]\HAL
+/drivers/char/hw_random/pluton-rng.c            [4x4]\HAL
+/drivers/dma/mtk3620-dma.c                      [4x4]\HAL
+/drivers/dma/mtk3620-dma.h                      [4x4]\HAL
+/drivers/i2c/busses/i2c-mt3620.c                [4x4]\HAL
+/drivers/iio/adc/mt3620_auxadc.c                [4x4]\HAL
+/drivers/mailbox/mt3620.c                       [4x4]\HAL
+/drivers/mailbox/mt3620.h                       [4x4]\HAL
+/drivers/mt3620hif/*                            [4x4]\HAL
+
+# The Azure Sphere flash MTD driver is not specific to a SoC, and thus maintained
+# by BasePlat.
+/drivers/mtd/chips/azure_sphere_flash.c         [4x4]\Base Platform and Update
+
+# SoC-specific data and code unique to the Azure Sphere fork of the kernel
+# are maintained by the HAL team.
+/drivers/net/wireless/mt3620/*                  [4x4]\HAL
+/drivers/pinctrl/mediatek/pinctrl-mt3620.c      [4x4]\HAL
+/drivers/pinctrl/mediatek/pinctrl-mtk-mt3620.h  [4x4]\HAL
+
+# The BasePlat team is the overall curator of the Azure Sphere platform driver.
+# Some portions of it may be factored out to be maintained by other teams
+# over time.
+/drivers/platform/azure_sphere/*                [4x4]\Base Platform and Update
+
+# SoC-specific data and code unique to the Azure Sphere fork of the kernel
+# are maintained by the HAL team.
+/drivers/pwm/pwm-mt3620.c                       [4x4]\HAL
+/drivers/rtc/rtc-mt3620.c                       [4x4]\HAL
+/drivers/spi/spi-mt3620.c                       [4x4]\HAL
+
+# Azure Sphere XiP Filesystem driver -- specific to XIP-capable systems, but
+# not specific to a particular SoC or platform.
+/fs/asxipfs/*                                   [4x4]\Base Platform and Update
+
+# SoC-specific data and code unique to the Azure Sphere fork of the kernel
+# are maintained by the HAL team.
+/include/mt3620/mt3620_hifapi.h                 [4x4]\HAL
+/include/mt3620/mt3620_mailbox.h                [4x4]\HAL
+
+# azspio is not SoC-specific, and is maintained by the LAN team.
+/include/uapi/linux/azspio.h                    [4x4]\Lifecycle and Networking
+/net/azspio/*                                   [4x4]\Lifecycle and Networking
+
+# Azure Sphere Linux Security Module -- interposes on select system calls to
+# enforce security policies. Presently maintained by the BasePlat team, in
+# continued collaboration with the APPS team.
+/security/azure_sphere/*                        [4x4]\Base Platform and Update

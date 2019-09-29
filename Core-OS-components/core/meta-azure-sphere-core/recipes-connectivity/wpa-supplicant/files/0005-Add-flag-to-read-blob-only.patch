@@ -1,0 +1,116 @@
+From 88273a27805464e89dd732478d0422d0e2046f5e Mon Sep 17 00:00:00 2001
+From: Chris Ong <chong@microsoft.com>
+Date: Thu, 22 Aug 2019 12:50:53 -0700
+Subject: [PATCH] Add flag to read blob only.
+
+---
+ wpa_supplicant/config.h         |  3 ++-
+ wpa_supplicant/config_file.c    |  8 ++++----
+ wpa_supplicant/wpa_supplicant.c | 10 ++++++----
+ 3 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/wpa_supplicant/config.h b/wpa_supplicant/config.h
+index cd7571f..1fbb39e 100644
+--- a/wpa_supplicant/config.h
++++ b/wpa_supplicant/config.h
+@@ -1547,6 +1547,7 @@ const char * wpa_config_get_global_field_name(unsigned int i, int *no_var);
+  * @name: Name of the configuration (e.g., path and file name for the
+  * configuration file)
+  * @cfgp: Pointer to previously allocated configuration data or %NULL if none
++ * @read_blob_only: TRUE: only read blob data. FALSE: read all configuration data.
+  * Returns: Pointer to allocated configuration data or %NULL on failure
+  *
+  * This function reads configuration data, parses its contents, and allocates
+@@ -1555,7 +1556,7 @@ const char * wpa_config_get_global_field_name(unsigned int i, int *no_var);
+  *
+  * Each configuration backend needs to implement this function.
+  */
+-struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp);
++struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp, Boolean read_blob_only);
+ 
+ /**
+  * wpa_config_write - Write or update configuration data
+diff --git a/wpa_supplicant/config_file.c b/wpa_supplicant/config_file.c
+index c333d17..a4d65b4 100644
+--- a/wpa_supplicant/config_file.c
++++ b/wpa_supplicant/config_file.c
+@@ -364,7 +364,7 @@ static int wpa_config_process_blob(struct wpa_config *config, FILE *f,
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+ 
+ 
+-struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp)
++struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp, Boolean read_blob_only)
+ {
+ 	FILE *f;
+ 	char buf[512], *pos;
+@@ -404,7 +404,7 @@ struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp)
+ 	}
+ 
+ 	while (wpa_config_get_line(buf, sizeof(buf), f, &line, &pos)) {
+-		if (os_strcmp(pos, "network={") == 0) {
++		if (!read_blob_only && os_strcmp(pos, "network={") == 0) {
+ 			ssid = wpa_config_read_network(f, &line, id++);
+ 			if (ssid == NULL) {
+ 				wpa_printf(MSG_ERROR, "Line %d: failed to "
+@@ -425,7 +425,7 @@ struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp)
+ 				errors++;
+ 				continue;
+ 			}
+-		} else if (os_strcmp(pos, "cred={") == 0) {
++		} else if (!read_blob_only && os_strcmp(pos, "cred={") == 0) {
+ 			cred = wpa_config_read_cred(f, &line, cred_id++);
+ 			if (cred == NULL) {
+ 				wpa_printf(MSG_ERROR, "Line %d: failed to "
+@@ -449,7 +449,7 @@ struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp)
+ 				continue;
+ 			}
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+-		} else if (wpa_config_process_global(config, pos, line) < 0) {
++		} else if (!read_blob_only && wpa_config_process_global(config, pos, line) < 0) {
+ 			wpa_printf(MSG_ERROR, "Line %d: Invalid configuration "
+ 				   "line '%s'.", line, pos);
+ 			errors++;
+diff --git a/wpa_supplicant/wpa_supplicant.c b/wpa_supplicant/wpa_supplicant.c
+index e587d7e..6610eb3 100644
+--- a/wpa_supplicant/wpa_supplicant.c
++++ b/wpa_supplicant/wpa_supplicant.c
+@@ -1031,14 +1031,15 @@ int wpa_supplicant_reload_configuration(struct wpa_supplicant *wpa_s)
+ 
+ 	if (wpa_s->confname == NULL)
+ 		return -1;
+-	conf = wpa_config_read(wpa_s->confname, NULL);
++	conf = wpa_config_read(wpa_s->confname, NULL, FALSE);
+ 	if (conf == NULL) {
+ 		wpa_msg(wpa_s, MSG_ERROR, "Failed to parse the configuration "
+ 			"file '%s' - exiting", wpa_s->confname);
+ 		return -1;
+ 	}
++	// Only read blob data for certificates
+ 	if (wpa_s->confanother &&
+-	    !wpa_config_read(wpa_s->confanother, conf)) {
++	    !wpa_config_read(wpa_s->confanother, conf, TRUE)) {
+ 		wpa_msg(wpa_s, MSG_ERROR,
+ 			"Failed to parse the configuration file '%s' - exiting",
+ 			wpa_s->confanother);
+@@ -5397,15 +5398,16 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
+ #else /* CONFIG_BACKEND_FILE */
+ 		wpa_s->confname = os_strdup(iface->confname);
+ #endif /* CONFIG_BACKEND_FILE */
+-		wpa_s->conf = wpa_config_read(wpa_s->confname, NULL);
++		wpa_s->conf = wpa_config_read(wpa_s->confname, NULL, FALSE);
+ 		if (wpa_s->conf == NULL) {
+ 			wpa_printf(MSG_ERROR, "Failed to read or parse "
+ 				   "configuration '%s'.", wpa_s->confname);
+ 			return -1;
+ 		}
+ 		wpa_s->confanother = os_rel2abs_path(iface->confanother);
++		// Only read blob data for certificates
+ 		if (wpa_s->confanother &&
+-		    !wpa_config_read(wpa_s->confanother, wpa_s->conf)) {
++		    !wpa_config_read(wpa_s->confanother, wpa_s->conf, TRUE)) {
+ 			wpa_printf(MSG_ERROR,
+ 				   "Failed to read or parse configuration '%s'.",
+ 				   wpa_s->confanother);
+-- 
+2.17.1
+

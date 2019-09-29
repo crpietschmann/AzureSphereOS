@@ -49,8 +49,13 @@
 #define I2C_RDWR	0x0707	/* Combined R/W transfer (one STOP only) */
 
 #define I2C_PEC		0x0708	/* != 0 to use PEC with SMBus */
+#define I2C_SPEED	0x0730	/* Configure speed in HZ */
 #define I2C_SMBUS	0x0720	/* SMBus transfer */
 
+#define I2C_SPEED_STANDARD	100000	/* 100 KHz */
+#define I2C_SPEED_FAST		400000	/* 400 KHz */
+#define I2C_SPEED_FAST_PLUS	1000000 /*   1 MHz */
+#define I2C_SPEED_HIGH		3400000 /* 3.4 MHz */
 
 /* This is the structure as used in the I2C_SMBUS ioctl call */
 struct i2c_smbus_ioctl_data {

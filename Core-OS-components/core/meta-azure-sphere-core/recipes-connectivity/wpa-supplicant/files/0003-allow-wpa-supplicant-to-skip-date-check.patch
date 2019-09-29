@@ -1,0 +1,66 @@
+From f0ba94be880d320b49932f57e5776cc05cd66934 Mon Sep 17 00:00:00 2001
+From: Matthew Renzelmann <mrenz@microsoft.com>
+Date: Wed, 14 Aug 2019 10:49:50 -0700
+Subject: [PATCH] Add preprocessor flag to allow WPA Supplicant to skip
+ certificate date/time checks.  The goal is to allow successful connections to
+ EAP TLS networks even if the clock on the device is wrong.
+
+The relevant preprocessor directive is called
+CONFIG_AZSPHERE_DISABLE_TIME_CHECKS.
+
+Note that this change requires a patch to WolfSSL to work properly.
+---
+ src/crypto/tls_wolfssl.c      | 19 +++++++++++++++----
+ src/eap_peer/eap_tls_common.c |  6 ++++++
+ 2 files changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/src/crypto/tls_wolfssl.c b/src/crypto/tls_wolfssl.c
+index cc8c704..27ae8af 100644
+--- a/src/crypto/tls_wolfssl.c
++++ b/src/crypto/tls_wolfssl.c
+@@ -1170,10 +1170,21 @@ static int tls_connection_ca_cert(void *tls_ctx, struct tls_connection *conn,
+ 	}
+ 
+ 	if (ca_cert_blob) {
+-		if (wolfSSL_CTX_load_verify_buffer(ctx, ca_cert_blob, blob_len,
+-						   SSL_FILETYPE_ASN1) !=
+-		    SSL_SUCCESS) {
+-			wpa_printf(MSG_INFO, "SSL: failed to load CA blob");
++#ifdef CONFIG_AZSPHERE_DISABLE_TIME_CHECKS
++		wpa_printf(MSG_INFO, "SSL: allowing date error\n");
++		int result = wolfSSL_CTX_load_verify_buffer_ex(
++						   ctx, ca_cert_blob, blob_len,
++						   SSL_FILETYPE_ASN1,
++						   0, /* is not a chain */
++						   WOLFSSL_LOAD_FLAG_DATE_ERR_OKAY);
++#else
++		wpa_printf(MSG_INFO, "SSL: not allowing date error\n");
++		int result = wolfSSL_CTX_load_verify_buffer(
++						   ctx, ca_cert_blob, blob_len,
++						   SSL_FILETYPE_ASN1);
++#endif
++		if (result != SSL_SUCCESS) {
++			wpa_printf(MSG_INFO, "SSL: failed to load CA blob: %d %d", result, blob_len);
+ 			return -1;
+ 		}
+ 		wpa_printf(MSG_DEBUG, "SSL: use CA cert blob OK");
+diff --git a/src/eap_peer/eap_tls_common.c b/src/eap_peer/eap_tls_common.c
+index 0de1315..31e1965 100644
+--- a/src/eap_peer/eap_tls_common.c
++++ b/src/eap_peer/eap_tls_common.c
+@@ -180,6 +180,12 @@ static int eap_tls_params_from_conf(struct eap_sm *sm,
+ 		 */
+ 		params->flags |= TLS_CONN_DISABLE_TLSv1_3;
+ 	}
++
++#ifdef CONFIG_AZSPHERE_DISABLE_TIME_CHECKS
++	wpa_printf(MSG_DEBUG, "TLS: disabling certificate time checks");
++	params->flags |= TLS_CONN_DISABLE_TIME_CHECKS;
++#endif
++
+ 	if (phase2) {
+ 		wpa_printf(MSG_DEBUG, "TLS: using phase2 config options");
+ 		eap_tls_params_from_conf2(params, config);
+-- 
+2.17.1
+

@@ -242,6 +242,7 @@
 	ldr	lr, [sp], #4
 	rfeia	sp!
 #endif
+	cfi_end_svc_regs
 	.endm
 
 	@
@@ -289,6 +290,7 @@
 	ldmia	r0, {r0 - r1}
 	rfeia	r8
 #endif
+	cfi_end_svc_regs
 	.endm
 
 
@@ -350,6 +352,47 @@
 	.endm
 
 /*
+ * Add CFI directives that correspond to a pt_regs struct on the stack.
+ */
+	.macro declare_cfi_section
+	.cfi_sections .debug_frame
+	.endm
+
+	.macro cfi_mark_user_regs offset = 0
+	.cfi_startproc
+	.cfi_return_column pc
+	.cfi_signal_frame
+	.cfi_offset pc, \offset + S_PC
+	.cfi_offset lr, \offset + S_LR
+	.cfi_offset sp, \offset + S_SP
+	.cfi_offset ip, \offset + S_IP
+	.cfi_offset fp, \offset + S_FP
+	.cfi_offset r10, \offset + S_R10
+	.cfi_offset r9, \offset + S_R9
+	.cfi_offset r8, \offset + S_R8
+	.cfi_offset r7, \offset + S_R7
+	.cfi_offset r6, \offset + S_R6
+	.cfi_offset r5, \offset + S_R5
+	.cfi_offset r4, \offset + S_R4
+	.cfi_offset r3, \offset + S_R3
+	.cfi_offset r2, \offset + S_R2
+	.cfi_offset r1, \offset + S_R1
+	.cfi_offset r0, \offset + S_R0
+	.endm
+
+	.macro cfi_end_user_regs
+	.cfi_endproc
+	.endm
+
+	.macro cfi_mark_svc_regs
+	cfi_mark_user_regs offset = 0
+	.endm
+
+	.macro cfi_end_svc_regs
+	cfi_end_user_regs
+	.endm
+
+/*
  * Context tracking subsystem.  Used to instrument transitions
  * between user and kernel mode.
  */
@@ -374,6 +417,31 @@
 	.else
 	bl	context_tracking_user_enter
 	.endif
+#endif
+	.endm
+
+	.macro	invoke_syscall, table, nr, tmp, ret, reload=0
+#ifdef CONFIG_CPU_SPECTRE
+	mov	\tmp, \nr
+	cmp	\tmp, #NR_syscalls		@ check upper syscall limit
+	movcs	\tmp, #0
+	csdb
+	badr	lr, \ret			@ return address
+	.if	\reload
+	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
+	ldmccia	r1, {r0 - r6}			@ reload r0-r6
+	stmccia	sp, {r4, r5}			@ update stack arguments
+	.endif
+	ldrcc	pc, [\table, \tmp, lsl #2]	@ call sys_* routine
+#else
+	cmp	\nr, #NR_syscalls		@ check upper syscall limit
+	badr	lr, \ret			@ return address
+	.if	\reload
+	add	r1, sp, #S_R0 + S_OFF		@ pointer to regs
+	ldmccia	r1, {r0 - r6}			@ reload r0-r6
+	stmccia	sp, {r4, r5}			@ update stack arguments
+	.endif
+	ldrcc	pc, [\table, \nr, lsl #2]	@ call sys_* routine
 #endif
 	.endm
 

@@ -50,6 +50,13 @@
 
 // Error code that comes back from the N9 when a scan is in progress
 #define WIFI_SCAN_IN_PROGRESS 3
+// WIFI_MAX_CONNECTING_TIME_MSEC is a timeout value for the Wi-Fi CONNECTING state.
+// Any connection attempts made within this timeout will return EBUSY. Any attempts 
+// afterwards will send a disconnect to the N9 firmware and attempt the new connection.
+// Note, the timeout is only referenced in the mt3620_wifi_connect call, so a connection
+// attempt may continue after this timeout if no further mt3620_wifi_connect calls are
+// made.
+#define WIFI_MAX_CONNECTING_TIME_MSEC (10*1000) // 10 seconds
 
 struct mt3620_tx_desc *g_mt3620_txdesc;
 
@@ -132,7 +139,7 @@ get_vif_for_interface(struct mt3620_wifi_hw *wifi_hw, u8 interface)
 /// @skb - data buffer
 static void mt3620_wifi_data_received_handler(u8 inf, struct sk_buff *skb)
 {
-    struct mt3620_wifi_vif *vif = NULL ;
+    struct mt3620_wifi_vif *vif = NULL;
     if(g_wifi_hw->ibss_start == true)
         inf = WIFI_PORT_IBSS;
     vif = get_vif_for_interface(g_wifi_hw, inf);
@@ -544,16 +551,18 @@ static void mt3620_wifi_associated_event(struct mt3620_wifi_vif *vif,
 /// @vif - interface for event
 /// @data - event data buffer
 /// @data_size - size of data buffer
-static void mt3620_wifi_diassociate_event(struct mt3620_wifi_vif *vif,
+static void mt3620_wifi_disassociate_event(struct mt3620_wifi_vif *vif,
                       void *data, u32 data_size)
 {
     u8 *bssid = NULL;
+
+    struct mt3620_wifi_hw *wifi_hw = wiphy_priv(vif->wdev.wiphy);
 
     // AP mode
     if (vif->port == WIFI_PORT_AP) {
         // sanity check size
         if (data_size < ETH_ALEN) {
-            dev_err(g_wifi_hw->wifi->dev,
+            dev_err(wifi_hw->wifi->dev,
                 "Invalid size for IW_ASSOC_EVENT_FLAG: %#x",
                 data_size);
             return;
@@ -565,11 +574,11 @@ static void mt3620_wifi_diassociate_event(struct mt3620_wifi_vif *vif,
         // Indicate station is disconnected
         cfg80211_del_sta(vif->ndev, bssid, GFP_KERNEL);
 
-        dev_dbg(g_wifi_hw->wifi->dev, "Station disconnected: %pM",
+        dev_dbg(wifi_hw->wifi->dev, "Station disconnected: %pM",
             bssid);
     }else if (vif->port == WIFI_PORT_STA ||  vif->port == WIFI_PORT_IBSS) {
         // Station mode
-        mt3620_wifi_disconnect_if_connected(vif);
+        mt3620_wifi_disconnect_cfg80211(vif, false);
     }
 }
 
@@ -678,7 +687,7 @@ static void mt3620_wifi_custom_event_handler(struct mt3620_wifi_vif *vif,
     case IW_STA_LINKDOWN_EVENT_FLAG:
         // Normally we'll already be disconnected at this point
         // via disassociate events, but just in case let's handle this
-        mt3620_wifi_disconnect_if_connected(vif);
+        mt3620_wifi_disconnect_cfg80211(vif, false);
         break;
     case IW_STA_LINKUP_EVENT_FLAG:
         // We've finished establishing a working link, check QoS flags
@@ -692,8 +701,8 @@ static void mt3620_wifi_custom_event_handler(struct mt3620_wifi_vif *vif,
         break;
     case IW_DISASSOC_EVENT_FLAG:
     case IW_DEAUTH_EVENT_FLAG:
-        // Diassociate and Deauth and link down are all handled the same
-        mt3620_wifi_diassociate_event(vif, data, data_size);
+        // Disassociate and Deauth and link down are all handled the same
+        mt3620_wifi_disassociate_event(vif, data, data_size);
         break;
     case RT_REQ_IE_EVENT_FLAG:
         mt3620_wifi_req_ie_event(vif, data, data_size, ie_size);
@@ -1022,9 +1031,14 @@ static void mt3620_wifi_stop(struct mt3620_wifi_hw *wifi_hw)
     if (wifi_hw->num_vif == 0) {
         if (wifi_hw->scan_request != NULL) {
             // abort scan
-            mt3620_hif_api_send_command_to_n9_sync(
-                wifi_hw->wifi->hif_api_handle,
-                WIFI_COMMAND_ID_IOT_STOP_SCAN, true, NULL, 0, NULL, 0);
+            ret = mt3620_hif_api_send_command_to_n9_sync(
+                wifi_hw->wifi->hif_api_handle, WIFI_COMMAND_ID_IOT_STOP_SCAN,
+                true, NULL, 0, NULL, 0);
+            if (ret != SUCCESS) {
+                dev_err(wifi_hw->wifi->dev, "Error stopping scan: %#x", ret);
+            }
+            mt3620_wifi_scan_completed_event(wifi_hw->sta_vif);
+            dev_dbg(wifi_hw->wifi->dev, "WiFi abort scan complete\n");
         }
 
         // Turn off radio
@@ -1210,7 +1224,7 @@ static int mt3620_wifi_open(struct net_device *dev)
     if (!is_validate_country_code_data(country_code))
     {
         dev_err(wifi_hw->wifi->dev,
-                "Not a valid Regulatory region from EFUSE %c%c", 
+                "Not a valid Regulatory region from EFUSE {0x%02hhx, 0x%02hhx}",
                 country_code[0],
                 country_code[1]);
         country_code[0] = '0';
@@ -1892,12 +1906,6 @@ exit:
 static void mt3620_wifi_scan_abort_callback(u32 cmd, u8 status, void *data)
 {
     if (g_wifi_hw != NULL) {
-        // For connecting scans, change the state back to disconnected so that future
-        // connect attempts don't fail with EBUSY.
-        if (g_wifi_hw->sta_vif->state == CONNECTING) {
-            g_wifi_hw->sta_vif->state = DISCONNECTED;
-        }
-
         // Indicate scan complete on abort. In normal operations the N9 firmware will 
         // generate an IW_STA_SCAN_COMPLETED_EVENT_FLAG event when aborting scans, so
         // this event handling will result in a no-op. However, the WPA supplicant has
@@ -1939,7 +1947,7 @@ static void mt3620_wifi_abort_scan(struct wiphy *wiphy, struct wireless_dev *wde
 /// @ndev - net device
 /// @reason_code - disconnect reason
 /// @returns - 0 for success
-static int mt3620_wifi_disconnect(struct wiphy *wiphy, struct net_device *ndev,
+static int mt3620_wifi_disconnect_internal(struct wiphy *wiphy, struct net_device *ndev,
                   u16 reason_code)
 {
     struct mt3620_wifi_hw *wifi_hw = wiphy_priv(wiphy);
@@ -1949,9 +1957,6 @@ static int mt3620_wifi_disconnect(struct wiphy *wiphy, struct net_device *ndev,
 
     // check current link state
     if (vif->state == DISCONNECTED) {
-        // TODO: Still investigating a bug with a disconnect loop - the following notification may be needed
-        //cfg80211_del_sta(vif->ndev, vif->mode_data.sta.bssid, GFP_KERNEL);
-        dev_err(wifi_hw->wifi->dev, "[mt3620_wifi_disconnect] already disconnected\n");
         goto exit;
     }
 
@@ -1962,8 +1967,8 @@ static int mt3620_wifi_disconnect(struct wiphy *wiphy, struct net_device *ndev,
         goto exit;
     }
 
-    dev_info(wifi_hw->wifi->dev, "WiFi disconnecting from '%.*s' network in channel %d",
-        vif->mode_data.sta.ssid_len, vif->mode_data.sta.ssid, vif->channel);
+    dev_info(wifi_hw->wifi->dev, "WiFi disconnecting from '%.*s' network in channel %d, bssid: %pM",
+        vif->mode_data.sta.ssid_len, vif->mode_data.sta.ssid, vif->channel, vif->mode_data.sta.bssid);
 
     ret = mt3620_hif_api_send_command_to_n9_sync(
         wifi_hw->wifi->hif_api_handle, WIFI_COMMAND_ID_IOT_SET_DISCONNECT, true,
@@ -1978,6 +1983,35 @@ exit:
 }
 
 ///
+/// Disconnects from an AP
+///
+/// @wiphy - wiphy device
+/// @ndev - net device
+/// @reason_code - disconnect reason
+/// @returns - 0 for success
+static int mt3620_wifi_disconnect(struct wiphy *wiphy, struct net_device *ndev,
+                  u16 reason_code)
+{
+    int ret = SUCCESS;
+    struct mt3620_wifi_vif *vif = netdev_priv(ndev);
+
+    bool is_connecting = (vif->state == CONNECTING);
+
+    ret = mt3620_wifi_disconnect_internal(wiphy, ndev, reason_code);
+
+    // Force an upper layer disconnect when we are in the CONNECTING state since we normally
+    // ignore disassoc/link down notifications while in this state. Otherwise, the upper layer
+    // and the hardware will have different connection states. Note, this function can be called 
+    // directly by the kernel prior to any new connection attempts. So not issuing an upper layer
+    // disconnect will leave the device in a disconnect loop. 
+    if (is_connecting) {
+        mt3620_wifi_disconnect_cfg80211(vif, true);
+    }
+
+    return ret;
+}
+
+///
 /// Sets auth settings prior to connect
 ///
 /// @settings - crypto settings
@@ -1988,6 +2022,7 @@ static int mt3620_wifi_set_auth_mode(struct cfg80211_connect_params *params,
 {
     struct mt3620_wifi_set_auth_mode set_auth_mode;
     u32 wpa_versions = 0;
+    u32 suite = 0;
     int ret = SUCCESS;
 
     if(g_wifi_hw->in_hqa_mode) {
@@ -1996,32 +2031,48 @@ static int mt3620_wifi_set_auth_mode(struct cfg80211_connect_params *params,
         return -ENOSYS;
     }
 
-    if(params!= NULL)
+    if(params!= NULL) {
         wpa_versions = params->crypto.wpa_versions;
-    else
+        suite = params->crypto.akm_suites[0];
+    } else {
         wpa_versions = info->crypto.wpa_versions;
+        suite = info->crypto.akm_suites[0];
+    }
 
-    if((params!= NULL) && params->auth_type == NL80211_AUTHTYPE_SHARED_KEY)
+    if ((params!= NULL) && params->auth_type == NL80211_AUTHTYPE_SHARED_KEY)
         set_auth_mode.auth_mode = WIFI_AUTH_SHARED;
-    else{
-        switch (wpa_versions) {
-        case NL80211_WPA_VERSION_1:
-            set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA_PSK;
+    else if (wpa_versions == (NL80211_WPA_VERSION_1 | NL80211_WPA_VERSION_2) ||
+             wpa_versions == NL80211_WPA_VERSION_1 ||
+             wpa_versions == NL80211_WPA_VERSION_2) {
+        switch (suite)
+        {
+        case WLAN_AKM_SUITE_8021X:
+            if (wpa_versions==NL80211_WPA_VERSION_1)
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA;
+            else if (wpa_versions==NL80211_WPA_VERSION_2)
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA2;
+            else if (wpa_versions==(NL80211_WPA_VERSION_1 | NL80211_WPA_VERSION_2))
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA_PSK_WPA2;
             break;
-        case NL80211_WPA_VERSION_2:
-            set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA2_PSK;
-            break;
-        case NL80211_WPA_VERSION_1 | NL80211_WPA_VERSION_2:
-            set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA_PSK_WPA2_PSK;
-            break;
-        case 0:
-            set_auth_mode.auth_mode = WIFI_AUTH_MODE_OPEN;
+        case WLAN_AKM_SUITE_PSK:
+            if (wpa_versions==NL80211_WPA_VERSION_1)
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA_PSK;
+            else if (wpa_versions==NL80211_WPA_VERSION_2)
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA2_PSK;
+            else if (wpa_versions==(NL80211_WPA_VERSION_1 | NL80211_WPA_VERSION_2))
+                set_auth_mode.auth_mode = WIFI_AUTH_MODE_WPA_PSK_WPA2_PSK;
             break;
         default:
             dev_err(g_wifi_hw->wifi->dev,
-            "Unsupported WPA settings wpa_versions=%x\n",wpa_versions);
+                "Unsupported akm_suites=%x\n",suite);
             return -EINVAL;
         }
+    } else if (wpa_versions==0)
+        set_auth_mode.auth_mode = WIFI_AUTH_MODE_OPEN;
+    else {
+        dev_err(g_wifi_hw->wifi->dev,
+            "Unsupported WPA settings wpa_versions=%x\n",wpa_versions);
+        return -EINVAL;
     }
     // Set auth mode
     set_auth_mode.port = port;
@@ -2125,9 +2176,6 @@ mt3620_wifi_set_encryption_mode(struct cfg80211_crypto_settings *settings,
         return -EINVAL;
     }
 
-    // Future TODO 20943: 802.1x auth and other enterprise modes that aren't
-    // PSK
-
     // Set encryption mode
     set_encryption_mode.port = port;
 
@@ -2184,8 +2232,8 @@ static int mt3620_wifi_commit_wep_keys(struct mt3620_wifi_hw *wifi_hw,
         }
     }
 
-    if(g_wifi_hw->in_hqa_mode) {
-        dev_err(g_wifi_hw->wifi->dev,
+    if(wifi_hw->in_hqa_mode) {
+        dev_err(wifi_hw->wifi->dev,
             "Cannot set WEP keys. Device in RF Testing Mode");
         return -ENOSYS;
     }
@@ -2260,6 +2308,7 @@ static int mt3620_wifi_connect(struct wiphy *wiphy, struct net_device *ndev,
     int extra_ie_len = 0;
     bool need_disconnect = false;
     struct completion c;
+    bool connect_attempted = false;
 
     if(!wifi_hw->n9_initialized)
     {
@@ -2275,9 +2324,23 @@ static int mt3620_wifi_connect(struct wiphy *wiphy, struct net_device *ndev,
         goto exit;
     }
 
+    need_disconnect = vif->state != DISCONNECTED;
+
     if (vif->state == CONNECTING) {
-        ret = -EBUSY;
-        goto exit;
+        // Return EBUSY until the connecting timeout elapses, then continue the connection
+        // which will disconnect the ongoing connection attempt.
+        if (time_before(jiffies, vif->connecting_timeout)) {
+            dev_info(wifi_hw->wifi->dev,
+                "Connection attempt while connecting, returning EBUSY");
+            ret = -EBUSY;
+            goto exit;
+        }
+    } else {
+        // Mark this before we disconnect so we don't reset the scan table by
+        // indicating a link down event
+        vif->state = CONNECTING;
+        // Ignore overflow because it is handled by the 'time_before' macro above.
+        vif->connecting_timeout = jiffies + msecs_to_jiffies(WIFI_MAX_CONNECTING_TIME_MSEC);
     }
 
     // Alloc memory
@@ -2289,17 +2352,13 @@ static int mt3620_wifi_connect(struct wiphy *wiphy, struct net_device *ndev,
         goto exit;
     }
 
-    need_disconnect = vif->state != DISCONNECTED;
-
-    // Mark this before we disconnect so we don't reset the scan table by
-    // indicating a link down event
-    vif->state = CONNECTING;
+    connect_attempted = true;
 
     // Disconnect first if needed
     if (need_disconnect) {
         dev_info(wifi_hw->wifi->dev, "Connecting to     : %pM\n", params->bssid);
         dev_info(wifi_hw->wifi->dev, "Disconnecting from: %pM\n", vif->mode_data.sta.bssid);
-        mt3620_wifi_disconnect(wiphy, ndev, 0);
+        mt3620_wifi_disconnect_internal(wiphy, ndev, 0);
     }
 
     // We need to send a fresh scan targeting the ssid / channel we want to
@@ -2443,9 +2502,10 @@ exit:
     if (extra_ie != NULL) {
         devm_kfree(wifi_hw->wifi->dev, extra_ie);
     }
-    if (ret != SUCCESS) {
+    if (ret != SUCCESS && connect_attempted) {
         vif->state = DISCONNECTED;
     }
+
     return ret;
 }
 static int mt3620_wifi_join_ibss(struct wiphy *wiphy, struct net_device *ndev,
@@ -2479,11 +2539,6 @@ static int mt3620_wifi_join_ibss(struct wiphy *wiphy, struct net_device *ndev,
         goto exit;
     }
 
-    if (vif->state == CONNECTING) {
-        ret = -EBUSY;
-        goto exit;
-    }
-
     dev_info(wifi_hw->wifi->dev, "IBSS JOIN/CREATE\n");
     extra_ie_len = sizeof(struct mt3620_wifi_extra_ie) + params->ie_len;
     extra_ie = devm_kzalloc(wifi_hw->wifi->dev, extra_ie_len, GFP_KERNEL);
@@ -2502,7 +2557,7 @@ static int mt3620_wifi_join_ibss(struct wiphy *wiphy, struct net_device *ndev,
 
     // Disconnect first if needed
     if (need_disconnect) {
-        mt3620_wifi_disconnect(wiphy, ndev, 0);
+        mt3620_wifi_disconnect_internal(wiphy, ndev, 0);
     }
 
     // Set opmode for IBSS
@@ -3105,9 +3160,35 @@ exit:
 static int mt3620_wifi_set_pmksa(struct wiphy *wiphy, struct net_device *ndev,
                  struct cfg80211_pmksa *pmksa)
 {
-    // Future TODO 20943: PMKSA support when we need it for authentication
+    struct mt3620_wifi_vif *vif = netdev_priv(ndev);
+    int idx=0;
+    int ret = SUCCESS;
+    vif->mt3620_sta_pmkid.Length=PMKID_NO*(ETH_ALEN+PMKID_LEN);
+    vif->mt3620_sta_pmkid.BSSIDInfoCount=PMKID_NO;
 
-    return -EOPNOTSUPP;
+    for (idx = 0; idx < PMKID_NO; idx++) {
+        if (!memcmp((vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID), pmksa->bssid, 6))
+            {
+                memcpy((vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID),pmksa->bssid,ETH_ALEN);
+                memcpy((vif->mt3620_sta_pmkid.BSSIDInfo[idx].PMKID),pmksa->pmkid,PMKID_LEN);
+                break;
+            }
+        else if (is_zero_ether_addr(vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID))
+            {
+                memcpy((vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID),pmksa->bssid,ETH_ALEN);
+                memcpy((vif->mt3620_sta_pmkid.BSSIDInfo[idx].PMKID),pmksa->pmkid,PMKID_LEN);
+                break;
+            }
+
+    }
+
+    ret = mt3620_hif_api_send_command_to_n9_sync(
+        g_wifi_hw->wifi->hif_api_handle,
+        WIFI_COMMAND_ID_EXTENSION_SET_PMKID, true,
+        &vif->mt3620_sta_pmkid,
+        sizeof(NDIS_802_11_pmkid), NULL, 0);
+
+    return ret;
 }
 
 ///
@@ -3120,9 +3201,28 @@ static int mt3620_wifi_set_pmksa(struct wiphy *wiphy, struct net_device *ndev,
 static int mt3620_wifi_del_pmksa(struct wiphy *wiphy, struct net_device *ndev,
                  struct cfg80211_pmksa *pmksa)
 {
-    // Future TODO 20943: PMKSA support when we need it for authentication
-
-    return -EOPNOTSUPP;
+    int idx=0;
+    int ret = SUCCESS;
+    struct mt3620_wifi_vif *vif = netdev_priv(ndev);
+    vif->mt3620_sta_pmkid.Length=PMKID_NO*(ETH_ALEN+PMKID_LEN);
+    vif->mt3620_sta_pmkid.BSSIDInfoCount=PMKID_NO;
+    /* Search added PMKID, deleted it if existed */
+    for (idx = 0; idx < PMKID_NO; idx++)
+    {
+        if (!memcmp((vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID), pmksa->bssid, 6))
+        {
+            memset((vif->mt3620_sta_pmkid.BSSIDInfo[idx].BSSID), 0, ETH_ALEN);
+            memset((vif->mt3620_sta_pmkid.BSSIDInfo[idx].PMKID), 0, PMKID_LEN);
+            break;
+        }
+    }
+    ret = mt3620_hif_api_send_command_to_n9_sync(
+        g_wifi_hw->wifi->hif_api_handle,
+        WIFI_COMMAND_ID_EXTENSION_SET_PMKID, true,
+        &vif->mt3620_sta_pmkid,
+        sizeof(NDIS_802_11_pmkid), NULL, 0);
+   
+    return ret;
 }
 
 ///
@@ -3133,12 +3233,22 @@ static int mt3620_wifi_del_pmksa(struct wiphy *wiphy, struct net_device *ndev,
 /// @returns - 0 for success
 static int mt3620_wifi_flush_pmksa(struct wiphy *wiphy, struct net_device *ndev)
 {
-    // Future TODO 20943: PMKSA support when we need it for authentication
-
     // Note: we must succeed here since this is called early on in startup,
     // even if the connected BSS doesn't use PMKSA
 
-    return SUCCESS;
+    int ret = SUCCESS;
+    struct mt3620_wifi_vif *vif = netdev_priv(ndev);
+    memset(&vif->mt3620_sta_pmkid, 0, sizeof(NDIS_802_11_pmkid));
+    vif->mt3620_sta_pmkid.Length=PMKID_NO*(ETH_ALEN+PMKID_LEN);
+    vif->mt3620_sta_pmkid.BSSIDInfoCount=PMKID_NO;
+
+    ret = mt3620_hif_api_send_command_to_n9_sync(
+         g_wifi_hw->wifi->hif_api_handle,
+         WIFI_COMMAND_ID_EXTENSION_SET_PMKID, true,
+         &vif->mt3620_sta_pmkid,
+         sizeof(NDIS_802_11_pmkid), NULL, 0);
+
+    return ret;
 }
 
 ///
@@ -3292,6 +3402,7 @@ static int mt3620_wifi_start_ap(struct wiphy *wiphy, struct net_device *ndev,
     u8 beacon_interval;
     u8 dtim_period;
     int ret = SUCCESS;
+    bool connect_attempted = false;
 
     if(!wifi_hw->n9_initialized)
     {
@@ -3307,7 +3418,24 @@ static int mt3620_wifi_start_ap(struct wiphy *wiphy, struct net_device *ndev,
         goto exit;
     }
 
-    vif->state = CONNECTING;
+    if (vif->state == CONNECTING) {
+        // Return EBUSY until the connecting timeout elapses, then continue the connection
+        // which will disconnect the ongoing connection attempt.
+        if (time_before(jiffies, vif->connecting_timeout)) {
+            dev_info(wifi_hw->wifi->dev,
+                "Connection attempt while connecting, returning EBUSY");
+            ret = -EBUSY;
+            goto exit;
+        }
+    } else {
+        // Mark this before we disconnect so we don't reset the scan table by
+        // indicating a link down event
+        vif->state = CONNECTING;
+        // Ignore overflow because it is handled by the 'time_before' macro above.
+        vif->connecting_timeout = jiffies + msecs_to_jiffies(WIFI_MAX_CONNECTING_TIME_MSEC);
+    }
+
+    connect_attempted = true;
 
     // Setup encryption mode / auth mode
     ret = mt3620_wifi_set_auth_mode(NULL,info, vif->port);
@@ -3399,7 +3527,7 @@ static int mt3620_wifi_start_ap(struct wiphy *wiphy, struct net_device *ndev,
     netif_wake_queue(vif->ndev);
 
 exit:
-    if (ret != SUCCESS) {
+    if (ret != SUCCESS && connect_attempted) {
         vif->state = DISCONNECTED;
     }
     return ret;
@@ -3895,19 +4023,19 @@ static int mt3620_initialize_cfg80211(struct mt3620_wifi *wifi)
 
 static int mt3620_wifi_set_hqa_mode_capability(void)
 {
-	int ret = SUCCESS;
-	u16 capability = PLUTON_DEVICE_CAPABILITY_ENABLE_RF_TEST_MODE;
-	bool has_capability;
+    int ret = SUCCESS;
+    u16 capability = PLUTON_DEVICE_CAPABILITY_ENABLE_RF_TEST_MODE;
+    bool has_capability;
 
-	ret = pluton_remote_api_send_command_to_m4_sync(
-	    IS_CAPABILITY_ENABLED, &capability, sizeof(u16),
-	    &has_capability, sizeof(bool));
+    ret = pluton_remote_api_send_command_to_m4_sync(
+        IS_CAPABILITY_ENABLED, &capability, sizeof(u16),
+        &has_capability, sizeof(bool));
 
-	if (!ret) {
-		g_wifi_hw->has_hqa_mode_capability = has_capability;
-	}
+    if (!ret) {
+        g_wifi_hw->has_hqa_mode_capability = has_capability;
+    }
 
-	return ret;
+    return ret;
 }
 
 ///
@@ -3920,6 +4048,9 @@ static int mt3620_wifi_probe(struct platform_device *pdev)
     struct mt3620_wifi *wifi = NULL;
     void *handle = NULL;
     int ret = SUCCESS;
+#ifdef WIFI_N9_DBG_LOG_CHANGES
+    struct resource *regs = NULL;
+#endif
 //    u32 version;
 
     handle = mt3620_hif_api_get_handle(&pdev->dev);
@@ -3969,7 +4100,17 @@ static int mt3620_wifi_probe(struct platform_device *pdev)
         dev_err(wifi->dev, "Error checking RF test capability");
         return ret;
     }
-    
+
+    // Load the sysram sysram offset
+#ifdef WIFI_N9_DBG_LOG_CHANGES
+    regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+    wifi->pwifi_sysram_base= devm_ioremap_resource(wifi->dev, regs);
+
+    if (IS_ERR(wifi->pwifi_sysram_base)) {
+        return PTR_ERR(wifi->pwifi_sysram_base);
+    }
+#endif
     return ret;
 }
 

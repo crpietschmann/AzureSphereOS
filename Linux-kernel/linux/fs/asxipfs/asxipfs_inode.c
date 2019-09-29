@@ -76,9 +76,6 @@
 
 #include "asxipfs.h"
 
-#define XATTR_GROUPS_SUFFIX "groups"
-#define XATTR_NAME_GROUPS XATTR_SECURITY_PREFIX XATTR_GROUPS_SUFFIX
-
 /*
  * asxipfs super-block data in memory
  */
@@ -120,34 +117,13 @@ static DEFINE_MUTEX(read_mutex);
 
 #define ASXIPFS_INODE_IS_XIP(x)	((x)->i_mode & S_ISVTX)
 
-static int asxipfs_capability_get(const struct xattr_handler *handler, struct dentry * dentry, 
-		   struct inode *d_inode, const char *name, void *buff, size_t size);
-
-static int asxipfs_groups_get(const struct xattr_handler *handler, struct dentry * dentry, 
-		   struct inode *d_inode, const char *name, void *buff, size_t size);
-
-static const struct xattr_handler asxipfs_xattr_capability_handler = {
-	.name	= XATTR_NAME_CAPS,
-	.get	= asxipfs_capability_get
-};
-
-static const struct xattr_handler asxipfs_xattr_group_handler = {
-	.name	= XATTR_NAME_GROUPS,
-	.get	= asxipfs_groups_get
-};
-
-static const struct xattr_handler *asxipfs_xattr_handlers[] = {
-	&asxipfs_xattr_capability_handler,
-	&asxipfs_xattr_group_handler,
-	NULL
-};
-
 enum {
-	Opt_physaddr, Opt_owner, Opt_group, Opt_suid, Opt_sgid, Opt_nosec, Opt_mode, Opt_err
+	Opt_physaddr, Opt_owner, Opt_group, Opt_suid, Opt_sgid, Opt_nosec, Opt_mode, Opt_err, Opt_size,
 };
 
 static const match_table_t tokens = {
 	{Opt_physaddr, "physaddr=%s"},
+	{Opt_size, "size=%s"},
 	{Opt_owner, "owner=%u"},
 	{Opt_group, "group=%u"},
 	{Opt_suid, "suid=%u"},
@@ -180,6 +156,13 @@ static int asxipfs_parse_options(char *options, struct asxipfs_sb_info *sbi)
 				return 0;
 			}
 			sbi->linear_phys_addr = option;
+			break;
+		case Opt_size:
+			if (kstrtou32(args[0].from, 0, &option)) {
+				printk(KERN_ERR "asxipfs: invalid size parameter %s\n", args[0].from);
+				return 0;
+			}
+			sbi->size = option;
 			break;
 		case Opt_owner:
 			if (match_int(&args[0], &option)){
@@ -226,7 +209,7 @@ static int asxipfs_parse_options(char *options, struct asxipfs_sb_info *sbi)
 			if(match_octal(&args[0], &option)) {
 				printk(KERN_ERR "asxipfs: invalid mode parameter\n");
 				return 0;
-			}			
+			}
 			sbi->set_mode = true;
 			sbi->mode = option;
 			break;
@@ -281,7 +264,7 @@ static int asxipfs_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 		struct page *new_page = vmf->cow_page;
 		u32 blkptr_offset = PAGE_ALIGN(OFFSET(inode)) +
 				(vmf->pgoff << PAGE_SHIFT);
-				
+
 		void *data = (void *)(sbi->linear_virt_addr + blkptr_offset);
 		void *vto;
 
@@ -382,7 +365,7 @@ static int asxipfs_mmap(struct file *file, struct vm_area_struct *vma)
 		struct inode *inode = file->f_inode;
 		struct super_block *sb = inode->i_sb;
 		struct asxipfs_sb_info *sbi = ASXIPFS_SB(sb);
-		
+
 		address  = PAGE_ALIGN(sbi->linear_phys_addr + OFFSET(inode));
 		address += vma->vm_pgoff << PAGE_SHIFT;
 
@@ -400,7 +383,7 @@ static int asxipfs_mmap(struct file *file, struct vm_area_struct *vma)
 }
 
 static struct file_operations asxipfs_linear_xip_fops = {
-	.llseek		= generic_file_llseek,	
+	.llseek		= generic_file_llseek,
 	.read_iter		= generic_file_read_iter,
 	.mmap		= asxipfs_mmap,
 };
@@ -497,6 +480,9 @@ static void *asxipfs_read(struct super_block *sb, unsigned int offset, unsigned 
 	if (!len)
 		return NULL;
 
+	if (offset + len < offset || offset + len > sbi->size)
+		return NULL;
+
 	return (void *)(sbi->linear_virt_addr + offset);
 }
 
@@ -542,10 +528,16 @@ static int asxipfs_fill_super(struct super_block *sb, void *data, int silent)
 	 * reasons.  Some validation is made on the phys address but this
 	 * is not exhaustive and we count on the fact that someone using
 	 * this feature is supposed to know what he/she's doing.
+	 * Also, the size must be passed in.
 	 */
 
 	if (asxipfs_parse_options(data, sbi) == 0) {
 		printk(KERN_ERR "asxipfs: failed to read parameters\n");
+		return -EINVAL;
+	}
+
+	if (sbi->size == 0) {
+		printk(KERN_ERR "asxipfs: failed to pass in size param\n");
 		return -EINVAL;
 	}
 
@@ -568,13 +560,13 @@ static int asxipfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	if (azure_sphere_sm_verify_image_by_flash_address(sbi->linear_phys_addr) != 0) {
 		printk(KERN_ERR "asxipfs: image verification failed\n");
-		return -EINVAL;		
+		return -EINVAL;
 	}
 
 	/* Map only one page for now.  Will remap it when fs size is known.*/
 	sbi->linear_virt_addr =
 		ioremap(sbi->linear_phys_addr, PAGE_SIZE);
-		
+
 	if (!sbi->linear_virt_addr) {
 		printk(KERN_ERR "asxipfs: ioremap of the image failed\n");
 		return -EINVAL;
@@ -585,7 +577,13 @@ static int asxipfs_fill_super(struct super_block *sb, void *data, int silent)
 	mutex_lock(&read_mutex);
 
 	/* Read the first block and get the superblock from it */
-	memcpy(&super, asxipfs_read(sb, 0, sizeof(super)), sizeof(super));
+	data = asxipfs_read(sb, 0, sizeof(super));
+	if (!data) {
+		mutex_unlock(&read_mutex);
+		return -EINVAL;
+	}
+
+	memcpy(&super, data, sizeof(super));
 	mutex_unlock(&read_mutex);
 
 	/* Do sanity checks on the superblock */
@@ -605,16 +603,21 @@ static int asxipfs_fill_super(struct super_block *sb, void *data, int silent)
 		pr_err("root is not a directory\n");
 		return -EINVAL;
 	}
-	
-	super.root.mode |= (S_IRUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);				
+
+	super.root.mode |= (S_IRUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
 
 	root_offset = super.root.offset << 2;
 	if (super.flags & ASXIPFS_FLAG_FSID_VERSION_2) {
-		sbi->size = super.size;
+		if (super.size > sbi->size) {
+			pr_err("filesystem size exceeds mapping (%u > %lu)", super.size, sbi->size);
+			return -EINVAL;
+		} else {
+			sbi->size = super.size;
+		}
 		sbi->blocks = super.fsid.blocks;
 		sbi->files = super.fsid.files;
 	} else {
-		sbi->size = 1<<28;
+		// sbi->size is filled from mount parameters
 		sbi->blocks = 0;
 		sbi->files = 0;
 	}
@@ -651,10 +654,7 @@ static int asxipfs_fill_super(struct super_block *sb, void *data, int silent)
 		ioremap(sbi->linear_phys_addr, sbi->size);
 	if (!sbi->linear_virt_addr) {
 		printk(KERN_ERR "asxipfs: ioremap of the image failed\n");
-	}
-
-	if (super.flags & (ASXIPFS_FLAG_CAPABILITIES | ASXIPFS_FLAG_XATTR)) {
-		sb->s_xattr = asxipfs_xattr_handlers;
+		return -EINVAL;
 	}
 
 	return 0;
@@ -717,6 +717,10 @@ static int asxipfs_readdir(struct file *file, struct dir_context *ctx)
 
 		mutex_lock(&read_mutex);
 		de = asxipfs_read(sb, OFFSET(inode) + offset, sizeof(*de)+ASXIPFS_MAXPATHLEN);
+		if (!de) {
+			mutex_unlock(&read_mutex);
+			break;
+		}
 		name = (char *)(de+1);
 
 		/*
@@ -766,6 +770,10 @@ static struct dentry *asxipfs_lookup(struct inode *dir, struct dentry *dentry, u
 		int dir_off = OFFSET(dir) + offset;
 
 		de = asxipfs_read(dir->i_sb, dir_off, sizeof(*de)+ASXIPFS_MAXPATHLEN);
+		if (!de) {
+			inode = ERR_PTR(-EIO);
+			break;
+		}
 		name = (char *)(de+1);
 
 		/* Try to take advantage of sorted directories */
@@ -832,12 +840,17 @@ static int asxipfs_readpage(struct file *file, struct page *page)
 	if (page->index < maxblock) {
 		u32 blkptr_offset = PAGE_ALIGN(OFFSET(inode)) +
 				page->index * PAGE_SIZE;
+		void *data;
 
 		mutex_lock(&read_mutex);
-		memcpy(page_address(page),
-			asxipfs_read(sb, blkptr_offset, PAGE_SIZE),
-			PAGE_SIZE);
+		data = asxipfs_read(sb, blkptr_offset, PAGE_SIZE);
+		if (data != NULL)
+			memcpy(page_address(page),
+				data,
+				PAGE_SIZE);
 		mutex_unlock(&read_mutex);
+		if (data == NULL)
+			goto err;
 		bytes_filled = PAGE_SIZE;
 	}
 
@@ -856,8 +869,39 @@ err:
 	return 0;
 }
 
+static sector_t asxipfs_bmap(struct address_space *mapping, sector_t block)
+{
+	struct inode *inode = mapping->host;
+	u32 maxblock;
+	struct super_block *sb;
+	unsigned long addr;
+	u32 blkptr_offset;
+	struct asxipfs_sb_info *sbi;
+
+	/* asxipfs doesn't handle compressed files */
+	if(!ASXIPFS_INODE_IS_XIP(inode)) {
+		pr_err("Found compressed block\n");
+		return -EINVAL;
+	}
+
+	maxblock = (inode->i_size + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+	if (block > maxblock) {
+		return -EINVAL;
+	}
+
+	sb = inode->i_sb;
+	sbi = ASXIPFS_SB(sb);
+	blkptr_offset = PAGE_ALIGN(OFFSET(inode)) +
+			block * PAGE_SIZE;
+	addr = sbi->linear_phys_addr + blkptr_offset;
+
+	return addr;
+}
+
 static const struct address_space_operations asxipfs_aops = {
-	.readpage = asxipfs_readpage
+	.readpage = asxipfs_readpage,
+	.bmap = asxipfs_bmap,
 };
 
 /*
@@ -901,169 +945,12 @@ static int __init init_asxipfs_fs(void)
 {
 	int rv;
 	rv = register_filesystem(&asxipfs_fs_type);
-	return rv;	
+	return rv;
 }
 
 static void __exit exit_asxipfs_fs(void)
 {
 	unregister_filesystem(&asxipfs_fs_type);
-}
-
-static int asxipfs_get_xattr_offset(struct asxipfs_sb_info *sbi, struct inode *d_inode, const char *prefix, 
-	const char *suffix, unsigned int *offset, size_t *size)
-{
-	unsigned int i = 0;
-	unsigned int xattr_offset = 0;
-	unsigned int data_offset = 0;
-	struct asxipfs_xattr_table_header *table;
-	struct asxipfs_xattr_entry *entry;
-
-	*offset = 0;
-	*size = 0;
-
-	/* Get the offset to the capability block; it is right after the data */
-	if (sbi->flags & ASXIPFS_FLAG_CAPABILITIES) {
-		// Old form, fixed size
-
-		/* Only support queries on security.capability */
-		if (strncmp(XATTR_SECURITY_PREFIX, prefix, sizeof(XATTR_SECURITY_PREFIX) - 1) != 0)
-			return -ENODATA;
-
-		if (strncmp(XATTR_CAPS_SUFFIX, suffix, sizeof(XATTR_CAPS_SUFFIX) - 1) != 0)
-			return -ENODATA;
-
-		*offset = OFFSET(d_inode) + d_inode->i_size;
-		*size = sizeof(struct capabilities_block);
-		
-		return 0;
-	} else if (sbi->flags & ASXIPFS_FLAG_XATTR) {
-		// Read the table
-		// Table starts after data, aligned to the next 4 byte block
-		xattr_offset = OFFSET(d_inode) + d_inode->i_size;
-		xattr_offset = ALIGN(xattr_offset, 4);
-
-		table = asxipfs_read(d_inode->i_sb, xattr_offset, sizeof(struct asxipfs_xattr_table_header));
-		data_offset = xattr_offset + table->table_size;
-
-		// Entries are after the table
-		xattr_offset += sizeof(struct asxipfs_xattr_table_header);
-
-		for (i = 0; i < table->count; i++) {
-			entry = asxipfs_read(d_inode->i_sb, xattr_offset, sizeof(struct asxipfs_xattr_entry));
-
-			if ((strlen(prefix) + strlen(suffix)) == strlen(entry->name) &&
-				!strncmp(prefix, entry->name, strlen(prefix)) &&
-				!strncmp(suffix, entry->name + strlen(prefix), strlen(suffix))) {
-
-				// We found our entry
-				*offset = data_offset;
-				*size = entry->xattr_size;
-				
-				return 0;
-			}
-
-			// Not found, increment and try next entry
-			data_offset += entry->xattr_size;
-			xattr_offset += sizeof(struct asxipfs_xattr_entry) + entry->name_size;
-		}
-
-		// Not found
-		return -ENODATA;
-	} else {
-		// Unsupported, no data
-		return -ENODATA;
-	}
-}
-
-static int asxipfs_capability_get(const struct xattr_handler *handler, struct dentry * dentry, 
-		   struct inode *d_inode, const char *name, void *buffer, size_t size)
-{
-	unsigned int encoded_cap_size;
-	unsigned int cap_block_offset;
-	unsigned int cap_block_size;
-	int ret;
-	struct capabilities_block *cap_block;
-	void *encoded_caps;
-	size_t encoded_caps_offset;
-	size_t xattr_size;
-	struct asxipfs_sb_info *sbi;
-
-	sbi = ASXIPFS_SB(dentry->d_sb);
-
-	if (sbi->set_suid_bit || sbi->no_security_options) {
-		// When in SUID mode we don't honor what's in the file system
-		return -ENODATA;
-	}
-
-	ret = asxipfs_get_xattr_offset(sbi, d_inode, XATTR_SECURITY_PREFIX, XATTR_CAPS_SUFFIX, &cap_block_offset, &xattr_size);
-	if (ret != 0) {
-		return ret;
-	}
-
-	if (xattr_size < sizeof(struct capabilities_block)) {
-		printk(KERN_ERR "asxipfs xattr: file capability block too small\n");
-		return -ENODATA;
-	}
-
-	/* The capability block size in the image is at least as big as we expect it. Read it out */
-	cap_block = asxipfs_read(d_inode->i_sb, cap_block_offset, sizeof(struct capabilities_block));
-	cap_block_size = le32_to_cpu(cap_block->block_size);
-	if (cap_block_size < sizeof(struct capabilities_block)) {
-		printk(KERN_ERR "asxipfs xattr: file capability block too small\n");
-		return -ENODATA;
-	}
-
-	if (!cap_block->caps_present)
-		return -ENODATA;
-
-	/* Get the size of the encoded capability in the capability block */
-	encoded_cap_size = le32_to_cpu(cap_block->caps_size);
-	if (size < encoded_cap_size)
-		return -ERANGE;
-
-	/* Read the variable size encoded capability which follows the capability_block structure on disk */
-	encoded_caps_offset = cap_block_offset + offsetof(struct capabilities_block, encoded_caps);
-	encoded_caps = asxipfs_read(d_inode->i_sb, encoded_caps_offset, encoded_cap_size);
-
-	/* Copy the encoded capability to the caller's buffer and return */
-	memcpy(buffer, encoded_caps, encoded_cap_size);
-
-	return encoded_cap_size;
-}
-
-static int asxipfs_groups_get(const struct xattr_handler *handler, struct dentry * dentry, 
-		   struct inode *d_inode, const char *name, void *buffer, size_t size)
-{
-	unsigned int offset;
-	int ret;
-	size_t xattr_size;
-	void *data;
-	struct asxipfs_sb_info *sbi;
-
-	sbi = ASXIPFS_SB(dentry->d_sb);
-	
-	if (sbi->set_suid_bit || sbi->no_security_options) {
-		// When in SUID mode we don't honor what's in the file system
-		return -ENODATA;
-	}
-
-	ret = asxipfs_get_xattr_offset(sbi, d_inode, XATTR_SECURITY_PREFIX, XATTR_GROUPS_SUFFIX, &offset, &xattr_size);
-	if (ret != 0) {
-		return ret;
-	}
-
-	if (size == 0) {
-		return xattr_size;
-	}
-	
-	if (size < xattr_size) {
-		return -ERANGE;
-	}
-
-	data = asxipfs_read(d_inode->i_sb, offset, xattr_size);
-	memcpy(buffer, data, xattr_size);
-
-	return xattr_size;
 }
 
 module_init(init_asxipfs_fs)

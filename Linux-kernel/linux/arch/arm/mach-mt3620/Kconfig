@@ -4,7 +4,7 @@ menuconfig ARCH_MT3620
    select ARM_AMBA
    select ARM_GIC
    select POWER_RESET
-   select POWER_RESET_MT362X
+   select AZURE_SPHERE_RESET
    select CONFIG_ARCH_MTD_XIP
    select ARCH_MEDIATEK
    help

@@ -24,11 +24,13 @@
 // Structure for output from querying flash; includes information
 // about flash size along with the available size of erase and write
 // operations.
-struct azure_sphere_sm_flash_info {
+struct azure_sphere_sm_flash_info
+{
 	// Total size of the flash, in bytes.
 	u32 length;
 
-	struct {
+	struct
+	{
 		// Size of the smallest supported flash erase operation.
 		u32 min_length;
 		// Size of the *preferred* flash erase operation.
@@ -37,7 +39,8 @@ struct azure_sphere_sm_flash_info {
 		u32 max_length;
 	} erase;
 
-	struct {
+	struct
+	{
 		// Size of the smallest supported flash write operation.
 		u32 min_length;
 		// Size of the *preferred* flash write operation.
@@ -48,23 +51,25 @@ struct azure_sphere_sm_flash_info {
 };
 
 // Internal representation of RTC time
-struct azure_sphere_rtc_time {
-    u32 time_sec;     // seconds
-    u32 time_min;     // minutes
-    u32 time_hour;    // hours
-    u32 time_mday;    // day (of month)
-    u32 time_mon;     // month
-    u32 time_year;    // year
-    u32 time_wday;    // day (of week)
-    u32 time_yday;    // day (of year)
-    bool time_isdst;  // daylight savings in effect
+struct azure_sphere_rtc_time
+{
+	u32 time_sec;	// seconds
+	u32 time_min;	// minutes
+	u32 time_hour;   // hours
+	u32 time_mday;   // day (of month)
+	u32 time_mon;	// month
+	u32 time_year;   // year
+	u32 time_wday;   // day (of week)
+	u32 time_yday;   // day (of year)
+	bool time_isdst; // daylight savings in effect
 };
 
 // Internal representation of RTC alarm
-struct azure_sphere_rtc_wake_alarm {
-    bool enabled;           			// alarm enabled state
-    bool pending;           			// alarm pending
-    struct azure_sphere_rtc_time time;  // alarm time
+struct azure_sphere_rtc_wake_alarm
+{
+	bool enabled;					   // alarm enabled state
+	bool pending;					   // alarm pending
+	struct azure_sphere_rtc_time time; // alarm time
 };
 
 ///
@@ -151,7 +156,7 @@ int azure_sphere_sm_get_log_data_size(u32 storage_type);
 /// @length - size of the log data within the buffer to get
 /// @log_buffer - the log buffer
 /// @returns - GetLogDataReturnCode
-int azure_sphere_sm_get_log_data(u32 storage_type, u32 offset, u32 length, void __user* log_buffer);
+int azure_sphere_sm_get_log_data(u32 storage_type, u32 offset, u32 length, void __user *log_buffer);
 
 ///
 /// Get the number of peripherals of the specified type
@@ -166,8 +171,9 @@ int azure_sphere_sm_get_peripheral_count(uint16_t peripheral_type);
 /// @peripheral_type - the type of peripheral to query
 /// @uart_data - output parameter to fill with data
 /// @length - the size of the buffer
+/// @entry_length - the expected size of an entry in the output buffer
 /// @returns any error code
-int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart_data, u32 length);
+int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user *uart_data, u32 length, u32 entry_length);
 
 ///
 /// Derive Application Key
@@ -181,7 +187,6 @@ int azure_sphere_sm_list_peripherals(uint16_t peripheral_type, void __user* uart
 
 #define AZURE_SPHERE_SM_DERIVE_KEY_LENGTH 32
 int azure_sphere_sm_derive_key(void *client_uid, u32 generation_delta, void *key, u32 *instance, u32 *generation);
-
 
 ///
 /// Get the N9 Wi-fi firmware address and length
@@ -204,3 +209,70 @@ int azure_sphere_set_rtc_current_time(struct azure_sphere_rtc_time *time);
 /// @time - Alarm date & time and enable state to set.
 /// @returns - 0 for success
 int azure_sphere_set_rtc_alarm(struct azure_sphere_rtc_wake_alarm *alarm);
+
+///
+/// Starts an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @physical_address - The physical address of the executable to run
+/// @size - The size of the executable
+/// @flags - Debug flags
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_io_core_start(int core, uintptr_t physical_address, loff_t size, uint32_t flags);
+
+///
+/// Stops an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_io_core_stop(int core);
+
+///
+/// Sets debug flags of an IO core
+///
+/// @core_id - The IO Core instance to control
+/// @returns - 0 for success, non-zero for failure
+/// @flags - Debug flags
+int azure_sphere_sm_io_core_set_flags(int core, uint32_t flags);
+
+///
+/// Record a telemetry event
+///
+/// @id - Telemetry ID to record
+/// @event_timestamp - Time of the telemetry event
+/// @payload_length - Number of bytes of payload data.
+/// @payload - Payload data.  May be null if payload_length is 0
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_record_telemetry_event_data(uint16_t id, uint32_t event_timestamp, uint8_t payload_length, const void __user *payload);
+
+///
+/// Get telemetry data
+///
+/// @offset - Offset into aggregate to begin copying.  Pass 0 to create the aggregate.
+/// @buffer - Buffer to store the aggregate in.  Should be exactly 4096.
+/// @buffer_size - Length of the output_buffer, in bytes.
+/// @returns - Length of data written to the output buffer, or <= 0 on failure
+int azure_sphere_sm_get_telemetry(uint16_t offset, void __user *buffer, uint16_t buffer_size);
+
+///
+/// Reset or retain telemetry data
+///
+/// @retain - true to retain, false to reset
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_reset_retain_telemetry(bool retain);
+
+/// Configures a communication buffer for an IO Core
+///
+/// @core - The IO Core instance to control
+/// @type - The type of the communication buffer
+/// @physical_address - The physical address of the communication buffer
+/// @size - The size of the communication buffer
+/// @returns - 0 for success, non-zero for failure
+int azure_sphere_sm_io_core_configure_communication_buffer(int core, uint32_t type, uintptr_t physical_address, loff_t size);
+
+/*
+ * Add simple static assert that will be used to validate compatibility structs
+ */
+#ifndef static_assert
+#define static_assert(x, y) typedef int __security_monitor_static_assert[(x) ? 0 : -1]
+#endif // static_assert

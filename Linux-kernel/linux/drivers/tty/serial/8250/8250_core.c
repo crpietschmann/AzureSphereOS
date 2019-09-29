@@ -1156,6 +1156,14 @@ unreg_uart_drv:
 	uart_unregister_driver(&serial8250_reg);
 #endif
 out:
+    /*
+	 * isa_devs device is shared between all ports.
+	 * When there is a mismatch in the order of probe and remove calls between
+	 * different ports; remove destroys the device which is reused in the future probe.
+	 * This breaks the kset refcount on the tty class.
+	 * To work around this, disable the ISA PnP support here.
+	 */
+	serial8250_isa_devs = NULL;
 	return ret;
 }
 

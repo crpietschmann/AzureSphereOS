@@ -28,3 +28,6 @@ configs///reset.cfg # non-hardware
 configs///dma.cfg # non-hardware
 configs///spi.cfg # non-hardware
 configs///rtc.cfg # non-hardware
+configs///i2c.cfg # non-hardware
+configs///adc.cfg # non-hardware
+configs///pwm.cfg # non-hardware

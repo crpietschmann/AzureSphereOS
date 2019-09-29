@@ -301,7 +301,7 @@ static bool iio_validate_scan_mask(struct iio_dev *indio_dev,
  * buffers might request, hence this code only verifies that the
  * individual buffers request is plausible.
  */
-static int iio_scan_mask_set(struct iio_dev *indio_dev,
+int iio_scan_mask_set(struct iio_dev *indio_dev,
 		      struct iio_buffer *buffer, int bit)
 {
 	const unsigned long *mask;
@@ -340,12 +340,14 @@ err_invalid_mask:
 	kfree(trialmask);
 	return -EINVAL;
 }
+EXPORT_SYMBOL_GPL(iio_scan_mask_set);
 
-static int iio_scan_mask_clear(struct iio_buffer *buffer, int bit)
+int iio_scan_mask_clear(struct iio_buffer *buffer, int bit)
 {
 	clear_bit(bit, buffer->scan_mask);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(iio_scan_mask_clear);
 
 static ssize_t iio_scan_el_store(struct device *dev,
 				 struct device_attribute *attr,
@@ -482,12 +484,20 @@ static ssize_t iio_buffer_read_length(struct device *dev,
 	return sprintf(buf, "%d\n", buffer->length);
 }
 
+unsigned int iio_buffer_get_length(struct iio_dev *indio_dev)
+{
+	struct iio_buffer *buffer = indio_dev->buffer;
+
+	return buffer->length;
+}
+EXPORT_SYMBOL_GPL(iio_buffer_get_length);
+
+
 static ssize_t iio_buffer_write_length(struct device *dev,
 				       struct device_attribute *attr,
 				       const char *buf, size_t len)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct iio_buffer *buffer = indio_dev->buffer;
 	unsigned int val;
 	int ret;
 
@@ -495,14 +505,24 @@ static ssize_t iio_buffer_write_length(struct device *dev,
 	if (ret)
 		return ret;
 
-	if (val == buffer->length)
-		return len;
+	ret = iio_buffer_set_length(indio_dev, val);
+
+	return ret ? ret : len;
+}
+
+int iio_buffer_set_length(struct iio_dev *indio_dev, unsigned int len)
+{
+	struct iio_buffer *buffer = indio_dev->buffer;
+	int ret = 0;
+
+	if (len == buffer->length)
+		return 0;
 
 	mutex_lock(&indio_dev->mlock);
 	if (iio_buffer_is_active(indio_dev->buffer)) {
 		ret = -EBUSY;
 	} else {
-		buffer->access->set_length(buffer, val);
+		buffer->access->set_length(buffer, len);
 		ret = 0;
 	}
 	if (ret)
@@ -512,8 +532,9 @@ static ssize_t iio_buffer_write_length(struct device *dev,
 out:
 	mutex_unlock(&indio_dev->mlock);
 
-	return ret ? ret : len;
+	return ret;
 }
+EXPORT_SYMBOL_GPL(iio_buffer_set_length);
 
 static ssize_t iio_buffer_show_enable(struct device *dev,
 				      struct device_attribute *attr,
@@ -521,6 +542,11 @@ static ssize_t iio_buffer_show_enable(struct device *dev,
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	return sprintf(buf, "%d\n", iio_buffer_is_active(indio_dev->buffer));
+}
+
+bool iio_buffer_get_enable(struct iio_dev *indio_dev)
+{
+	return iio_buffer_is_active(indio_dev->buffer);
 }
 
 static unsigned int iio_storage_bytes_for_si(struct iio_dev *indio_dev,
@@ -969,23 +995,31 @@ static ssize_t iio_buffer_store_enable(struct device *dev,
 				       size_t len)
 {
 	int ret;
-	bool requested_state;
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	bool inlist;
+	bool requested_state;
 
 	ret = strtobool(buf, &requested_state);
 	if (ret < 0)
 		return ret;
 
+	ret = iio_buffer_set_enable(indio_dev, requested_state ? 1 : 0);
+
+	return (ret < 0) ? ret : len;
+}
+
+int iio_buffer_set_enable(struct iio_dev *indio_dev, bool enable)
+{
+	bool inlist;
+	int ret;
 	mutex_lock(&indio_dev->mlock);
 
 	/* Find out if it is in the list */
 	inlist = iio_buffer_is_active(indio_dev->buffer);
 	/* Already in desired state */
-	if (inlist == requested_state)
+	if (inlist == enable)
 		goto done;
 
-	if (requested_state)
+	if (enable)
 		ret = __iio_update_buffers(indio_dev,
 					 indio_dev->buffer, NULL);
 	else
@@ -994,8 +1028,10 @@ static ssize_t iio_buffer_store_enable(struct device *dev,
 
 done:
 	mutex_unlock(&indio_dev->mlock);
-	return (ret < 0) ? ret : len;
+
+	return ret;
 }
+EXPORT_SYMBOL_GPL(iio_buffer_set_enable)
 
 static const char * const iio_scan_elements_group_name = "scan_elements";
 
@@ -1009,15 +1045,21 @@ static ssize_t iio_buffer_show_watermark(struct device *dev,
 	return sprintf(buf, "%u\n", buffer->watermark);
 }
 
+unsigned int iio_buffer_get_watermark(struct iio_dev *indio_dev)
+{
+	return indio_dev->buffer->watermark;
+}
+EXPORT_SYMBOL_GPL(iio_buffer_get_watermark)
+
+
 static ssize_t iio_buffer_store_watermark(struct device *dev,
 					  struct device_attribute *attr,
 					  const char *buf,
 					  size_t len)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct iio_buffer *buffer = indio_dev->buffer;
-	unsigned int val;
 	int ret;
+	unsigned int val;
 
 	ret = kstrtouint(buf, 10, &val);
 	if (ret)
@@ -1025,9 +1067,19 @@ static ssize_t iio_buffer_store_watermark(struct device *dev,
 	if (!val)
 		return -EINVAL;
 
+	ret = iio_buffer_set_watermark(indio_dev, val);
+
+	return ret ? ret : len;
+}
+
+int iio_buffer_set_watermark(struct iio_dev *indio_dev, unsigned int len)
+{
+	struct iio_buffer *buffer = indio_dev->buffer;
+	int ret = 0;
+
 	mutex_lock(&indio_dev->mlock);
 
-	if (val > buffer->length) {
+	if (len > buffer->length) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1037,12 +1089,13 @@ static ssize_t iio_buffer_store_watermark(struct device *dev,
 		goto out;
 	}
 
-	buffer->watermark = val;
+	buffer->watermark = len;
 out:
 	mutex_unlock(&indio_dev->mlock);
 
-	return ret ? ret : len;
+	return ret;
 }
+EXPORT_SYMBOL_GPL(iio_buffer_set_watermark)
 
 static DEVICE_ATTR(length, S_IRUGO | S_IWUSR, iio_buffer_read_length,
 		   iio_buffer_write_length);

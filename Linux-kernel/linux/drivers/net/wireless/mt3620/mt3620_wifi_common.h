@@ -46,6 +46,21 @@
 #define CH_ACTIVE_SCAN 0
 #define CH_PASSIVE_SCAN  1
 
+#define PMKID_NO 4
+#define PMKID_LEN 16
+
+typedef struct _NDIS_802_11_bssid_info {
+	u8 BSSID[ETH_ALEN];
+	u8 PMKID[PMKID_LEN];
+} NDIS_802_11_bssid_info;
+
+typedef struct _NDIS_802_11_pmkid {
+	u32 Length;
+	u32 BSSIDInfoCount;
+	NDIS_802_11_bssid_info BSSIDInfo[PMKID_NO];
+} NDIS_802_11_pmkid;
+
+
 /** @brief Port types*/
 enum mt3620_wifi_vif_port {
 	// Port for our STA client
@@ -153,6 +168,55 @@ struct mt3620_tx_desc {
 		u32 msg_count;
 };
 
+#ifdef WIFI_N9_DBG_LOG_CHANGES
+//dbglevel for n9 debug log
+#define RT_DEBUG_OFF        0
+#define RT_DEBUG_ERROR      1
+#define RT_DEBUG_WARN       2
+#define RT_DEBUG_TRACE      3
+#define RT_DEBUG_INFO       4
+#define RT_DEBUG_LOUD       5
+
+enum Dbg_Print_Write_Operation_Type{
+	DBG_SYSRAM_OVERWRITE_BUF_PRINT=0,
+	DBG_SYSRAM_DROP_BUF_PRINT = 1
+};
+enum Dbg_OwnerShip{
+	DBG_SYSRAM_OWN_CA7 =0,
+	DBG_SYSRAM_OWN_N9 =1
+};
+enum Dbg_SysRAM_Buf_Status{
+	DBG_SYSRAM_INIT_DONE=0,
+	DBG_SYSRAM_WRITE_IN_PROGRESS=1,
+	DBG_SYSRAM_READ_IN_PROGRESS=2,
+	DBG_SYSRAM_CRASH_DUMP_START=3,
+	DBG_SYSRAM_CRASH_DUMP_DONE=4,
+	DBG_SYSRAM_HDR_ERROR=5,
+	DBG_SYSRAM_ADDRESS_ERROR=6,
+	DBG_SYSRAM_BUFFER_FULL=7,
+	DBG_SYSRAM_START_WORKING=8,
+	DBG_SYSRAM_OWNERSHIP_ERROR=9,
+	DBG_SYSRAM_BUFFER_STOP_BY_HOST=10
+};
+
+typedef enum _ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_T
+{
+    ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_OFF = 0,
+    ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_2_UART = 1,
+    ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_2_SYSRAM = 2,
+} ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_T, *P_ENUM_EXT_CMD_FW_LOG_2_HOST_CTRL_T;
+
+typedef struct DbgMemHeader{
+	uint16_t CurrentBufLen;	//current length of the buffer
+	uint16_t StartBufOffset;		//start address of the buffer from DBG_SYSRAM_LOG_HDR_START_ADDR
+	uint16_t NextBufOffset;		//end of the buffer from DBG_SYSRAM_LOG_HDR_START_ADDR
+	uint16_t MaxBufLen; 		//constant info for ca7:max length of the log buffer
+	uint8_t  BufHdrLen;			//constant info for ca7:max length of the log header
+	uint8_t  BufOwnerShip; 		//constant info for N9: memory ownership n9=1; and ca7=0;
+	uint8_t  WriteOperationType; 	//constant info for N9: 0 = overwritebuffer, 1= non overwrite buffer
+	uint8_t  BufStatus;				//status of buffer
+}DBGSYSRAMHDR,*PDBGSYSRAMHDR;
+#endif
 
 /** @brief Our basic device state structure
 */
@@ -172,6 +236,12 @@ struct mt3620_wifi {
 
 	spinlock_t data_lock;
 	struct mt3620_tx_desc mt3620_txdesc;
+#endif
+#ifdef WIFI_N9_DBG_LOG_CHANGES
+	//N9 debug print level
+	uint8_t n9_dbg_mode;
+	//n9 sysram base address for log support
+	void __iomem *pwifi_sysram_base;
 #endif
 };
 
@@ -510,10 +580,13 @@ enum mt3620_wifi_auth_mode {
 	WIFI_AUTH_MODE_OPEN = 0,
 	// shared auth
 	WIFI_AUTH_SHARED = 1,
+	WIFI_AUTH_MODE_WPA = 3,
 	// WPA PSK
 	WIFI_AUTH_MODE_WPA_PSK = 4,
+	WIFI_AUTH_MODE_WPA2 = 6,
 	// WPA2 PSK
 	WIFI_AUTH_MODE_WPA2_PSK = 7,
+	WIFI_AUTH_MODE_WPA_PSK_WPA2 = 8,
 	// WPA / WPA2 mixed PSK
 	WIFI_AUTH_MODE_WPA_PSK_WPA2_PSK = 9,
 };
@@ -845,6 +918,11 @@ struct mt3620_wifi_vif {
 		struct mt3620_wifi_vif_ap_data ap;
 		struct mt3620_wifi_vif_station_data sta;
 	} mode_data;
+	// The connecting state timeout value
+	unsigned long connecting_timeout;
+
+	//PMKID Data
+	NDIS_802_11_pmkid mt3620_sta_pmkid;
 };
 
 
@@ -886,9 +964,9 @@ struct mt3620_wifi_hw {
 int mt3620_wifi_set_mac_helper(struct mt3620_wifi_hw *wifi_hw, 
 	                       struct mt3620_wifi_set_mac_addr *mac);
 
-/** @brief Disconnect from Wi-Fi if connected
+/** @brief Disconnect Wi-Fi upper layer
 */
-void mt3620_wifi_disconnect_if_connected(struct mt3620_wifi_vif *vif);
+void mt3620_wifi_disconnect_cfg80211(struct mt3620_wifi_vif *vif, bool force_disconnect);
 
 
 /** @brief Apply regulatory changes

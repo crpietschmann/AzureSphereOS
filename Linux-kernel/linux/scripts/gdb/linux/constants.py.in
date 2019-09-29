@@ -10,10 +10,17 @@
  *
  * This work is licensed under the terms of the GNU GPL version 2.
  *
+ * Modifications:
+ *	- Microsoft Feb 2019 - Add THREAD_SIZE define for ARM.
+ *
  */
 
 #include <linux/fs.h>
 #include <linux/mount.h>
+
+#ifdef CONFIG_ARM
+#include <asm/thread_info.h>
+#endif
 
 /* We need to stringify expanded macros so that they can be parsed */
 
@@ -50,3 +57,8 @@ LX_VALUE(MNT_NOEXEC)
 LX_VALUE(MNT_NOATIME)
 LX_VALUE(MNT_NODIRATIME)
 LX_VALUE(MNT_RELATIME)
+
+#ifdef CONFIG_ARM
+/* arch/arm/include/asm/thread_info.h */
+LX_GDBPARSED(THREAD_SIZE)
+#endif

@@ -4,15 +4,15 @@ Date: Wed, 1 Nov 2017 09:30:14 -0700
 Subject: [PATCH] Implement local solib caching
 
 ---
- gdb/build-id.c | 113 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ gdb/build-id.c | 113 +++++++++++++++++++++++++++++++++++++++++++++++++
  gdb/build-id.h |   4 ++
- gdb/remote.c   |  38 +++++++++++++++++++
+ gdb/remote.c   |  39 +++++++++++++++++
  gdb/remote.h   |   2 +
- gdb/solib.c    |  36 ++++++++++++++++++
- 5 files changed, 193 insertions(+)
+ gdb/solib.c    |  36 ++++++++++++++++
+ 5 files changed, 194 insertions(+)
 
 diff --git a/gdb/build-id.c b/gdb/build-id.c
-index ed66bc6..cba869b 100644
+index c8eacbd..aaa9a21 100644
 --- a/gdb/build-id.c
 +++ b/gdb/build-id.c
 @@ -26,6 +26,7 @@
@@ -23,9 +23,9 @@ index ed66bc6..cba869b 100644
  
  /* See build-id.h.  */
  
-@@ -160,3 +161,115 @@ find_separate_debug_file_by_buildid (struct objfile *objfile)
-     }
-   return NULL;
+@@ -203,3 +204,115 @@ find_separate_debug_file_by_buildid (struct objfile *objfile)
+ 
+   return std::string ();
  }
 +
 +extern char*solib_cache_path;
@@ -140,12 +140,12 @@ index ed66bc6..cba869b 100644
 +}
 +
 diff --git a/gdb/build-id.h b/gdb/build-id.h
-index 6826807..e8e49fc 100644
+index 15fb609..ff8dbd8 100644
 --- a/gdb/build-id.h
 +++ b/gdb/build-id.h
-@@ -47,4 +47,8 @@ extern bfd *build_id_to_debug_bfd (size_t build_id_len,
- 
- extern char *find_separate_debug_file_by_buildid (struct objfile *objfile);
+@@ -58,4 +58,8 @@ extern gdb_bfd_ref_ptr build_id_to_debug_bfd (size_t build_id_len,
+   return bin2hex (build_id->data, build_id->size);
+ }
  
 +/* Get a copy of the remote solib file from the local solib cache */
 +
@@ -153,10 +153,10 @@ index 6826807..e8e49fc 100644
 +
  #endif /* BUILD_ID_H */
 diff --git a/gdb/remote.c b/gdb/remote.c
-index cba5e74..2beed2e 100644
+index 9a5286d..dfd91fd 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
-@@ -1526,6 +1526,9 @@ enum {
+@@ -2107,6 +2107,9 @@ enum {
    /* Support TARGET_WAITKIND_NO_RESUMED.  */
    PACKET_no_resumed,
  
@@ -166,7 +166,7 @@ index cba5e74..2beed2e 100644
    PACKET_MAX
  };
  
-@@ -4698,6 +4701,7 @@ static const struct protocol_feature remote_protocol_features[] = {
+@@ -5192,6 +5195,7 @@ static const struct protocol_feature remote_protocol_features[] = {
    { "vContSupported", PACKET_DISABLE, remote_supported_packet, PACKET_vContSupported },
    { "QThreadEvents", PACKET_DISABLE, remote_supported_packet, PACKET_QThreadEvents },
    { "no-resumed", PACKET_DISABLE, remote_supported_packet, PACKET_no_resumed },
@@ -174,8 +174,8 @@ index cba5e74..2beed2e 100644
  };
  
  static char *remote_support_xml;
-@@ -11982,6 +11986,37 @@ remote_file_put (const char *local_file, const char *remote_file, int from_tty)
-   do_cleanups (back_to);
+@@ -12523,6 +12527,38 @@ remote_target::remote_file_put (const char *local_file, const char *remote_file,
+     printf_filtered (_("Successfully sent file \"%s\".\n"), local_file);
  }
  
 +int
@@ -184,12 +184,13 @@ index cba5e74..2beed2e 100644
 +	char *attachment;
 +	int remote_errno;
 +	int ret, attachment_len;
-+	struct remote_state *rs = get_remote_state();
-+	int left = get_remote_packet_size();
-+	char *p = rs->buf;
++  remote_target *remote = get_current_remote_target ();
++	struct remote_state *rs = remote->get_remote_state();
++	int left = remote->get_remote_packet_size();
++	char *p = rs->buf.data();
 +	int read_len;
 +
-+	if (remote_hostio_set_filesystem(NULL, &remote_errno) != 0)
++	if (remote->remote_hostio_set_filesystem(NULL, &remote_errno) != 0)
 +		return -1;
 +
 +	remote_buffer_add_string(&p, &left, "vFile:buildid:");
@@ -197,7 +198,7 @@ index cba5e74..2beed2e 100644
 +	remote_buffer_add_bytes(&p, &left, (const gdb_byte *)filename,
 +		strlen(filename));
 +
-+	ret = remote_hostio_send_command(p - rs->buf, PACKET_vFile_buildid,
++	ret = remote->remote_hostio_send_command(p - rs->buf.data(), PACKET_vFile_buildid,
 +		&remote_errno, &attachment, &attachment_len);
 +	if (ret < 0)
 +		return ret;
@@ -212,7 +213,7 @@ index cba5e74..2beed2e 100644
  void
  remote_file_get (const char *remote_file, const char *local_file, int from_tty)
  {
-@@ -14335,6 +14370,9 @@ Show the maximum size of the address (in bits) in a memory packet."), NULL,
+@@ -14700,6 +14736,9 @@ Show the maximum size of the address (in bits) in a memory packet."), NULL,
    add_packet_config_cmd (&remote_protocol_packets[PACKET_no_resumed],
  			 "N stop reply", "no-resumed-stop-reply", 0);
  
@@ -223,29 +224,29 @@ index cba5e74..2beed2e 100644
       for all packet configs.  */
    {
 diff --git a/gdb/remote.h b/gdb/remote.h
-index af58b34..e908813 100644
+index 82c3736..1bd2af2 100644
 --- a/gdb/remote.h
 +++ b/gdb/remote.h
-@@ -54,4 +54,6 @@ extern int remote_register_number_and_offset (struct gdbarch *gdbarch,
- 					      int *poffset);
+@@ -57,4 +57,6 @@ extern int remote_register_number_and_offset (struct gdbarch *gdbarch,
  
- extern void remote_notif_get_pending_events (struct notif_client *np);
+ extern void remote_notif_get_pending_events (remote_target *remote,
+ 					     struct notif_client *np);
 +
 +extern int remote_file_get_build_id(const char *remote_file, gdb_byte **build_id);
  #endif
 diff --git a/gdb/solib.c b/gdb/solib.c
-index e9862d0..47b745b 100644
+index e1d237e..0ddb9e4 100644
 --- a/gdb/solib.c
 +++ b/gdb/solib.c
-@@ -46,6 +46,7 @@
- #include "filesystem.h"
+@@ -47,6 +47,7 @@
  #include "gdb_bfd.h"
- #include "filestuff.h"
+ #include "common/filestuff.h"
+ #include "source.h"
 +#include "build-id.h"
  
  /* Architecture-specific operations.  */
  
-@@ -104,6 +105,18 @@ show_solib_search_path (struct ui_file *file, int from_tty,
+@@ -105,6 +106,18 @@ show_solib_search_path (struct ui_file *file, int from_tty,
  		    value);
  }
  
@@ -264,28 +265,28 @@ index e9862d0..47b745b 100644
  /* Same as HAVE_DOS_BASED_FILE_SYSTEM, but useable as an rvalue.  */
  #if (HAVE_DOS_BASED_FILE_SYSTEM)
  #  define DOS_BASED_FILE_SYSTEM 1
-@@ -512,6 +525,16 @@ solib_bfd_open (char *pathname)
+@@ -496,6 +509,16 @@ solib_bfd_open (const char *pathname)
        perror_with_name (pathname);
      }
  
 +  /* check for a local cache */
-+  if (solib_cache_path != NULL && is_target_filename(found_pathname))
++  if (solib_cache_path != NULL && is_target_filename(found_pathname.get ()))
 +  {
-+	  char *cached_file = build_id_remote_file_to_cached_file(found_pathname);
++	  char *cached_file = build_id_remote_file_to_cached_file(found_pathname. get());
 +	  if (cached_file != NULL)
 +	  {
-+		  found_pathname = cached_file;
++		  found_pathname.reset (cached_file);
 +	  }
 +  }
 +
    /* Open bfd for shared library.  */
-   gdb_bfd_ref_ptr abfd (solib_bfd_fopen (found_pathname, found_file));
+   gdb_bfd_ref_ptr abfd (solib_bfd_fopen (found_pathname.get (), found_file));
  
-@@ -1675,4 +1698,17 @@ PATH and LD_LIBRARY_PATH."),
+@@ -1649,4 +1672,17 @@ PATH and LD_LIBRARY_PATH."),
  				     reload_shared_libraries,
  				     show_solib_search_path,
  				     &setlist, &showlist);
-+
++ 
 +  add_setshow_optional_filename_cmd("solib-cache-path", class_support,
 +					 &solib_cache_path, _("\
 +Set the path for loading/storing cached shared library files."),
@@ -300,5 +301,5 @@ index e9862d0..47b745b 100644
 +
 +
 -- 
-2.7.4
+2.17.1
 

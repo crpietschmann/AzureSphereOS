@@ -9,6 +9,9 @@
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
+ *
+ * Modifications:
+ *  - Microsoft Feb 2019 - Add facility to disable and restore early_con.
  */
 
 #define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
@@ -302,3 +305,17 @@ int __init of_setup_earlycon(const struct earlycon_id *match,
 }
 
 #endif /* CONFIG_OF_EARLY_FLATTREE */
+
+short __init disable_earlycon(void)
+{
+	short enabled = (early_con.flags & CON_ENABLED);
+
+	early_con.flags &= ~CON_ENABLED;
+	return enabled;
+}
+
+void restore_earlycon(short enabled)
+{
+	if (enabled)
+		early_con.flags |= CON_ENABLED;
+}

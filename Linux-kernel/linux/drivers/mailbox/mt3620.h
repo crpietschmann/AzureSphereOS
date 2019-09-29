@@ -57,13 +57,20 @@ struct mt3620_mailbox_channel {
 	int write_irq;
 	// Bottom half of wr IRQ handler
 	struct tasklet_struct write_tasklet;
+	// IRQ for user interrupts
+	int user_irq;
+	// Bottom half of user IRQ handler
+	struct work_struct user_work;
 	// Hardware version number
 	u32 version;
 };
 
-#define	MBOX_VER_MT3620	(0x36200000)
+#define MBOX_VER_MT3620 (0x36200000)
 
 // Channel interrupt enable and status registers
+#define MXBO_SW_TX_INT_PORT_OFFSET (0x14)
+#define MBOX_SW_RX_INT_EN_OFFSET (0x18)
+#define MBOX_SW_RX_INT_STS_OFFSET (0x1C)
 #define MBOX_INT_EN_OFFSET (0x38)
 #define MBOX_INT_STS_OFFSET (0x3C)
 
@@ -89,3 +96,11 @@ enum mt3620_mailbox_interrupt_types {
 	MBOX_INT_TYPE_NE,
 	MBOX_INT_TYPE_NF,
 };
+
+// Channel type (stored in LSB of pointer)
+#define MBOX_MT3620_CHAN_TYPE_MASK 1
+#define MBOX_MT3620_CHAN_TYPE_FIFO 0
+#define MBOX_MT3620_CHAN_TYPE_USERINT 1
+
+// Channels per hardware mailbox
+#define MBOX_MT3620_CHAN_PER_MAILBOX 2

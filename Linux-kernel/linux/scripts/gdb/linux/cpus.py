@@ -10,10 +10,13 @@
 #
 # This work is licensed under the terms of the GNU GPL version 2.
 #
+# Modifications:
+#   - Microsoft Feb 2019 - Make lx_current(-1) work for ARM, add current_task
+#   helper
 
 import gdb
 
-from linux import tasks, utils
+from linux import tasks, utils, constants
 
 
 MAX_CPUS = 4096
@@ -155,6 +158,19 @@ Note that VAR has to be quoted as string."""
 
 PerCpu()
 
+thread_info_type = utils.CachedType("struct thread_info")
+
+def current_task(cpu=-1):
+	if utils.is_target_arch("arm") and cpu == -1:
+		# Round the stack pointer down to the bottom of the thread stack to find
+		# the thread info struct.
+		thread_info = gdb.newest_frame().read_register('sp').cast(utils.get_long_type())
+		thread_info = thread_info - thread_info % constants.LX_THREAD_SIZE
+		thread_info = thread_info.cast(thread_info_type.get_type().pointer())
+		return thread_info['task']
+	var_ptr = gdb.parse_and_eval("&current_task")
+	return per_cpu(var_ptr, cpu).dereference()
+
 
 class LxCurrentFunc(gdb.Function):
     """Return current task.
@@ -166,8 +182,7 @@ number. If CPU is omitted, the CPU of the current context is used."""
         super(LxCurrentFunc, self).__init__("lx_current")
 
     def invoke(self, cpu=-1):
-        var_ptr = gdb.parse_and_eval("&current_task")
-        return per_cpu(var_ptr, cpu).dereference()
+        return current_task(cpu)
 
 
 LxCurrentFunc()

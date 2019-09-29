@@ -1,0 +1,125 @@
+From c3f638a7aca5e43ca850f27e3a27448ff9830c6c Mon Sep 17 00:00:00 2001
+From: Hassan Sufi <hasufi@microsoft.com>
+Date: Tue, 17 Sep 2019 16:57:11 -0700
+Subject: [PATCH] Don't commit the temporary config if there was an error
+ writing it
+
+Return a FAIL-NO_SPACE error when the config cannot be saved due to hitting a filesystem quota
+
+Don't commit the temporary config file if it goes over a certain threshold
+---
+ wpa_supplicant/Makefile      |  4 ++++
+ wpa_supplicant/config_file.c | 44 +++++++++++++++++++++++++++++++-----
+ wpa_supplicant/ctrl_iface.c  | 11 +++++++--
+ 3 files changed, 51 insertions(+), 8 deletions(-)
+
+diff --git a/wpa_supplicant/Makefile b/wpa_supplicant/Makefile
+index a219752..c159b94 100644
+--- a/wpa_supplicant/Makefile
++++ b/wpa_supplicant/Makefile
+@@ -1863,6 +1863,10 @@ OBJS_t2 += $(FST_OBJS)
+ OBJS_nfc += $(FST_OBJS)
+ endif
+ 
++ifdef CONFIG_TEMP_CONFIG_FILE_SIZE
++CFLAGS += -DCONFIG_TEMP_CONFIG_FILE_SIZE=$(CONFIG_TEMP_CONFIG_FILE_SIZE)
++endif
++
+ ifndef LDO
+ LDO=$(CC)
+ endif
+diff --git a/wpa_supplicant/config_file.c b/wpa_supplicant/config_file.c
+index a4d65b4..aa08fff 100644
+--- a/wpa_supplicant/config_file.c
++++ b/wpa_supplicant/config_file.c
+@@ -11,9 +11,9 @@
+  */
+ 
+ #include "includes.h"
+-#ifdef ANDROID
++#if defined(ANDROID) || defined(CONFIG_TEMP_CONFIG_FILE_SIZE)
+ #include <sys/stat.h>
+-#endif /* ANDROID */
++#endif /* ANDROID || CONFIG_TEMP_CONFIG_FILE_SIZE */
+ 
+ #include "common.h"
+ #include "config.h"
+@@ -1582,7 +1582,34 @@ int wpa_config_write(const char *name, struct wpa_config *config)
+ #endif /* CONFIG_DONT_WRITE_BLOBS */
+ #endif /* CONFIG_NO_CONFIG_BLOBS */
+ 
+-	os_fdatasync(f);
++	int error_set_on_stream = ferror(f);
++	if (error_set_on_stream) {
++		wpa_printf(MSG_DEBUG, "Encountered an error while writing to the stream");
++		ret = -1;
++	}
++
++	/* See if we can get a more specific error */
++	if (os_fdatasync(f) < 0) {
++		int error = errno;
++		wpa_printf(MSG_DEBUG, "Could not sync data (%d, %s)", error, strerror(error));
++		ret = -error;
++	}
++
++#ifdef CONFIG_TEMP_CONFIG_FILE_SIZE
++	struct stat statbuf;
++
++	/* Check if the temp config file is larger than it should be */
++	if (stat(tmp_name, &statbuf) < 0) {
++		wpa_printf(MSG_WARNING, "Cannot stat the temp config file (%d, %s)", errno, sterror(errno));
++		ret - 1;
++	} else {
++		if (statbuf.st_size > CONFIG_TEMP_CONFIG_FILE_SIZE) {
++			wpa_printf(MSG_INFO, "Temporary config file is %d bytes, which is"
++				" larger than the max %d bytes", CONFIG_TEMP_CONFIG_FILE_SIZE);
++			ret = -ENOSPC;
++		}
++	}
++#endif /* CONFIG_TEMP_CONFIG_FILE_SIZE */
+ 
+ 	fclose(f);
+ 
+@@ -1593,9 +1620,14 @@ int wpa_config_write(const char *name, struct wpa_config *config)
+ 		chmod_ret = chmod(tmp_name,
+ 				  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+ #endif /* ANDROID */
+-		if (chmod_ret != 0 || rename(tmp_name, orig_name) != 0)
+-			ret = -1;
+-
++		if (ret >= 0) {
++			wpa_printf(MSG_DEBUG, "Commiting temp config");
++			if (chmod_ret != 0 || rename(tmp_name, orig_name) != 0)
++				ret = -1;
++		} else {
++			wpa_printf(MSG_DEBUG, "Error while syncing file, removing temp config");
++			unlink(tmp_name);
++		}
+ 		os_free(tmp_name);
+ 	}
+ 
+diff --git a/wpa_supplicant/ctrl_iface.c b/wpa_supplicant/ctrl_iface.c
+index 2163e30..d343565 100644
+--- a/wpa_supplicant/ctrl_iface.c
++++ b/wpa_supplicant/ctrl_iface.c
+@@ -10327,8 +10327,15 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
+ 							       reply_size);
+ #ifndef CONFIG_NO_CONFIG_WRITE
+ 	} else if (os_strcmp(buf, "SAVE_CONFIG") == 0) {
+-		if (wpa_supplicant_ctrl_iface_save_config(wpa_s))
+-			reply_len = -1;
++		int ret = wpa_supplicant_ctrl_iface_save_config(wpa_s);
++		if (ret < 0) {
++			if (abs(ret) == ENOSPC || abs(ret) == EDQUOT) {
++				os_memcpy(reply, "FAIL-ENOSPC\n", 12);
++				reply_len = 12;
++			} else {
++				reply_len = -1;
++			}
++		}
+ #endif /* CONFIG_NO_CONFIG_WRITE */
+ 	} else if (os_strncmp(buf, "GET_CAPABILITY ", 15) == 0) {
+ 		reply_len = wpa_supplicant_ctrl_iface_get_capability(
+-- 
+2.17.1
+

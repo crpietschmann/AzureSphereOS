@@ -68,6 +68,8 @@ int pluton_release(struct inode *inode, struct file *filp)
 	bool valid = false;
 
 	data = filp->private_data;
+	if(!data)
+		return 0;
 
 	mutex_lock(&pending_async_ops_mutex);
 
@@ -88,10 +90,7 @@ int pluton_release(struct inode *inode, struct file *filp)
 		kfree(data->data);
 	}
 
-	if (data) {
-		kfree(data);
-	}
-
+	kfree(data);
 	mutex_unlock(&pending_async_ops_mutex);
 
 	return 0;

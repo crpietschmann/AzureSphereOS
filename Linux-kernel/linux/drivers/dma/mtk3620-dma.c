@@ -56,6 +56,7 @@
 #define DMA_LONG            0x2
 
 #define DMA_HANDSHAKE       BIT(0)
+#define DMA_DIR_DEV_TO_MEM  BIT(2)
 
 // 0: src-side ; 1:dst-side
 #define WRAP_SEL(x)         ((x) << 20)
@@ -745,12 +746,12 @@ static void mtk_dma_glb_cfg_write(struct mtk_chan *c, unsigned int reg, unsigned
 
 	glb_cfg_base = MTK3620_CA7DMA_CHANIO(mtkd->base, mtkd->dma_num);
 
-	printk(KERN_DEBUG "[%s]DMA mtkd->base:0x%p, glb_cfg_base:0x%p\n",
+	dev_dbg(mtkd->ddev.dev, "[%s]DMA mtkd->base:0x%p, glb_cfg_base:0x%p\n",
 		__func__, mtkd->base, glb_cfg_base);
 
 	writel(val, glb_cfg_base + reg);
 
-	printk(KERN_DEBUG "[%s]DMA mtkd->base:0x%p, reg:0x%08x\n",
+	dev_dbg(mtkd->ddev.dev, "[%s]DMA mtkd->base:0x%p, reg:0x%08x\n",
 		__func__, mtkd->base, readl(glb_cfg_base + reg));
 }
 
@@ -762,7 +763,7 @@ static unsigned int mtk_dma_glb_cfg_read(struct mtk_chan *c, unsigned int reg)
 
 	glb_cfg_base = MTK3620_CA7DMA_CHANIO(mtkd->base, mtkd->dma_num);
 
-	printk(KERN_DEBUG "[%s]DMA mtkd->base:0x%p, glb_cfg_base:0x%p\n",
+	dev_dbg(mtkd->ddev.dev, "[%s]DMA mtkd->base:0x%p, glb_cfg_base:0x%p\n",
 		__func__, mtkd->base, glb_cfg_base);
 
 	return_value = (unsigned int)readl(glb_cfg_base + reg);
@@ -772,12 +773,13 @@ static unsigned int mtk_dma_glb_cfg_read(struct mtk_chan *c, unsigned int reg)
 
 static int mtk_dma_clk_enable(struct mtk_chan *c)
 {
+	struct mtk_dmadev *mtkd = to_mtk_dma_dev(c->vc.chan.device);
 	unsigned int channel;
 	unsigned int reg =  0;
 
 	channel = c->dma_ch;
 
-	printk(KERN_DEBUG "[%s] channel:%u, ver:0x%08x\n",
+	dev_dbg(mtkd->ddev.dev, "[%s] channel:%u, ver:0x%08x\n",
 		__func__, channel, mtk_dma_glb_cfg_read(c, 0));
 
 	if(channel < 32){
@@ -790,7 +792,7 @@ static int mtk_dma_clk_enable(struct mtk_chan *c)
 		reg = mtk_dma_glb_cfg_read(c, CH_EN_STS1);
 	}
 
-	printk(KERN_DEBUG "[%s] channel:%u, reg:0x%08x\n",
+	dev_dbg(mtkd->ddev.dev, "[%s] channel:%u, reg:0x%08x\n",
 		__func__, channel, reg);
 
 	if ((reg & ( (channel < 32)?(1 << channel):(1 << (channel-32)) )) == 0) {
@@ -810,8 +812,8 @@ static void mtk_dma_desc_free(struct virt_dma_desc *vd)
 
 	spin_lock(&c->lock);
 
-	/* Check "free descriptor" fucntion and descriptor content */
-	if(c->cfg.slave_id == SLAVE_ID_I2S){
+	/* Check "free descriptor" function and descriptor content */
+	if(c->cfg.slave_id == SLAVE_ID_I2S || c->cfg.slave_id == SLAVE_ID_ADC){
 		for (count = 0; count < c->desc->sg_num; count++) {
 			if (c->desc->control_block_cyclic[count].cb != NULL){
 				kfree(c->desc->control_block_cyclic[count].cb);
@@ -977,7 +979,8 @@ static void mtk_set_vff_dma_param(struct mtk_chan *c)
 	dev_dbg(c->vc.chan.device->dev, "[%s]DMA ch%d\n", __func__, c->dma_ch);
 
 	if (!c || !c->desc || !c->desc->sg) {
-		dev_err(c->vc.chan.device->dev, "\t\tNull mtk_chan pointer\n");
+		dev_err(c->vc.chan.device->dev, "\t[%s]\tnull mtk_chan pointer\n",
+		__func__);
 		return;
 	}
 
@@ -1113,7 +1116,8 @@ static void mtk_set_cyclic_dma_param(struct mtk_chan *c)
 
 	dev_dbg(c->vc.chan.device->dev, "[%s]DMA ch%d\n", __func__, c->dma_ch);
 	if (!c || !c->desc || !c->desc->control_block_cyclic) {
-	dev_err(c->vc.chan.device->dev, "\t\tNull mtk_chan pointer\n");
+	dev_err(c->vc.chan.device->dev, "\t[%s]\tnull mtk_chan pointer\n",
+		__func__);
 	return;
 	}
 
@@ -1184,7 +1188,7 @@ static void mtk_set_cyclic_dma_param(struct mtk_chan *c)
 			mtk_dma_chan_write(c, VDMA_INT_EN, INT_EN_B);
 			/* thres (rx_vff_valid_size >= rx_vff_thre) */
 			mtk_dma_chan_write(c, VDMA_THRE,
-				(desc_list->control_block_cyclic[desc_list->sg_idx].cb->length & MASK_FOR_8_BYTE_ALIGN));
+				desc_list->control_block_cyclic[desc_list->sg_idx].cb->length);
 			//mtk_dma_chan_write(c, VDMA_RX_FLOW_CTRL, 0x80);
 
 			/* con */
@@ -1294,7 +1298,7 @@ static void mtk_set_peri_dma_param(struct mtk_chan *c)
 			dma_con = mtk_dma_chan_read(c, DMA_CON);
 			if (c->cfg.slave_id == SLAVE_ID_I2C){
 				trans_size = DMA_BYTE;
-				mtk_dma_chan_write(c, DMA_CONNECT, DMA_HANDSHAKE);
+				mtk_dma_chan_write(c, DMA_CONNECT, DMA_HANDSHAKE | DMA_DIR_DEV_TO_MEM);
 			}else if (c->cfg.slave_id == SLAVE_ID_SPI){
 				trans_size = DMA_LONG;
 				mtk_dma_chan_write(c, DMA_CONNECT, DMA_HANDSHAKE);
@@ -1482,9 +1486,9 @@ static void mtk_cyclic_dma_irq(struct mtk_chan *c)
 {
 	struct mtk_dmadev *dev;
 	struct virt_dma_desc *vd = vchan_next_desc(&c->vc);
-
-	unsigned int reg = 0;
-	unsigned int ch = 0, flag = 0, inten= 0;
+	struct mtk_desc *desc_list = c->desc;
+	unsigned int thresh = 0, length = 0, offset = 0;
+	unsigned int reg = 0, ch = 0, flag = 0, inten= 0, pread = 0;
 
 
 	dev_dbg(c->vc.chan.device->dev, "[%s]VDMA ch%d\n", __func__, c->dma_ch);
@@ -1497,6 +1501,7 @@ static void mtk_cyclic_dma_irq(struct mtk_chan *c)
 	ch = c->dma_ch;
 	flag = mtk_dma_chan_read(c, VDMA_INT_FLAG);
 	inten = mtk_dma_chan_read(c, VDMA_INT_EN);
+	pread = mtk_dma_chan_read(c, VDMA_RPT);
 
 	if (((flag & VFF_THRE_INT_FLAG_B) == VFF_THRE_INT_FLAG_B) && ((inten & VFF_THRE_INT_EN_B) == VFF_THRE_INT_EN_B))
 	{
@@ -1509,10 +1514,36 @@ static void mtk_cyclic_dma_irq(struct mtk_chan *c)
 		printk(KERN_DEBUG "[%s] (Before)VDMA_INT_FLAG(THRE): 0x%08x(0x%08x)\n",
 			__func__, (unsigned int)(c->channel_base+ VDMA_INT_FLAG), reg);
 
+		// Update the read pointer and the read-wrap bit
+
+		// threashold (our notification boundary) is the length of one frame. 
+		thresh = desc_list->control_block_cyclic[desc_list->sg_idx].cb->length;
+		length = thresh * desc_list->sg_num;
+
+		// pread contains both the offset, and a "wrap" flag.  So we just 
+		// pull off the offset in the low 16 bits
+		offset = pread & 0xFFFFU; 
+
+		// Update to the new offset 
+		offset += thresh;
+
+		// Check for wrap, if we wrapped, then toggle the "wrap" flag.
+		if (offset >= length){
+			offset -= length;
+			pread ^= VDMA_RX_RPT_WRAP_B;
+		}
+
+		// mask-out the old offset, and or-in the new one. 
+		pread &= ~0xFFFFU;
+		pread |= offset & 0xFFFFU;
+
+		// write the register back to the hardware
+		mtk_dma_chan_write(c, VDMA_RPT, pread);
+
+		// flag the interrupt as serviced
 		mtk_dma_chan_write(c, VDMA_INT_FLAG, VFF_THRE_INT_FLAG_B);
 
 		reg = mtk_dma_chan_read(c, VDMA_INT_FLAG);
-
 		printk(KERN_DEBUG "[%s] (After)VDMA_INT_FLAG(THRE): 0x%08x(0x%08x)\n",
 			__func__, (unsigned int)(c->channel_base + VDMA_INT_FLAG), reg);
 	}
@@ -1545,11 +1576,11 @@ static irqreturn_t mtk_dma_callback(int irq, void *data)
 				case SLAVE_ID_SPI:
 					mtk_peri_dma_irq(c);
 					break;
-				case SLAVE_ID_ADC:
 				case SLAVE_ID_UART:
 				case SLAVE_ID_UART_CA7:
 					mtk_vff_dma_irq(c);
 					break;
+				case SLAVE_ID_ADC:
 				case SLAVE_ID_I2S:
 					mtk_cyclic_dma_irq(c);
 					break;
@@ -1699,8 +1730,6 @@ static void mtk_dma_start_desc(struct mtk_chan *c)
 	struct mtk_desc *d;
 	struct mtk_dmadev *dev;
 
-	printk(KERN_DEBUG "[%s]\n", __func__);
-
 	if (!vd) {
 		c->desc = NULL;
 		return;
@@ -1710,7 +1739,7 @@ static void mtk_dma_start_desc(struct mtk_chan *c)
 
 	dev = to_mtk_dma_dev(c->vc.chan.device);
 
-	printk(KERN_DEBUG "[%s]DMA (ch%d,m2m_ch_s:%d,m2m_ch_e:%d)",
+	dev_dbg(c->vc.chan.device->dev, "[%s]DMA (ch%d,m2m_ch_s:%d,m2m_ch_e:%d)",
 		__func__, c->dma_ch, dev->m2m_ch_s, dev->m2m_ch_e);
 
 	if (c->dma_ch >= dev->m2m_ch_s && c->dma_ch <= dev->m2m_ch_e){ /* m2m */
@@ -1721,11 +1750,11 @@ static void mtk_dma_start_desc(struct mtk_chan *c)
 			case SLAVE_ID_SPI:
 				mtk_set_peri_dma_param(c);
 				break;
-			case SLAVE_ID_ADC:
 			case SLAVE_ID_UART:
 			case SLAVE_ID_UART_CA7:
 				mtk_set_vff_dma_param(c);
 				break;
+			case SLAVE_ID_ADC:
 			case SLAVE_ID_I2S:
 				mtk_set_cyclic_dma_param(c);
 				break;
@@ -1942,7 +1971,7 @@ static struct dma_async_tx_descriptor *mtk_dma_prep_dma_cyclic(
 	dma_addr_t dev_addr;
 	unsigned int frame;
 
-
+	
 	dev_dbg(chan->device->dev, "[%s]DMA ch%d",
 		__func__, c->dma_ch);
 
@@ -2056,7 +2085,7 @@ static int mtk_dma_slave_config(struct dma_chan *chan,
 		goto exit;
 	}
 
-	if (cfg->slave_id == SLAVE_ID_I2S){
+	if (cfg->slave_id == SLAVE_ID_I2S || cfg->slave_id == SLAVE_ID_ADC){
 		if ((cfg->direction == DMA_DEV_TO_MEM &&
 			cfg->src_addr_width != DMA_SLAVE_BUSWIDTH_4_BYTES) ||
 			(cfg->direction == DMA_MEM_TO_DEV &&
@@ -2347,7 +2376,7 @@ static int mtk_dma_probe(struct platform_device *pdev)
 	mtkd->vff_ch_e = vff_ch_e;
 	mtkd->vff_ch_num = vff_ch_num;
 
-	for(i = 0; i< (m2m_ch_num+peri_ch_num+vff_ch_num); i++){
+	for(i = 0; i < (m2m_ch_num+peri_ch_num+vff_ch_num); i++){
 		c = mtk_dma_chan_init(mtkd);
 
 		if (!c) {

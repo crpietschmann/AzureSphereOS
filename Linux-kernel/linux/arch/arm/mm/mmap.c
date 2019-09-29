@@ -1,5 +1,8 @@
 /*
  *  linux/arch/arm/mm/mmap.c
+ *
+ *  Modifications:
+ *  - Microsoft Mar 2019 - Change mmap base for wider memory range for ASLR
  */
 #include <linux/fs.h>
 #include <linux/mm.h>
@@ -10,6 +13,7 @@
 #include <linux/personality.h>
 #include <linux/random.h>
 #include <asm/cachetype.h>
+#include <linux/kconfig.h>
 
 #define COLOUR_ALIGN(addr,pgoff)		\
 	((((addr)+SHMLBA-1)&~(SHMLBA-1)) +	\
@@ -34,12 +38,38 @@ static unsigned long mmap_base(unsigned long rnd)
 {
 	unsigned long gap = rlimit(RLIMIT_STACK);
 
+#ifndef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
 	if (gap < MIN_GAP)
 		gap = MIN_GAP;
 	else if (gap > MAX_GAP)
 		gap = MAX_GAP;
 
 	return PAGE_ALIGN(TASK_SIZE - gap - rnd);
+#else
+	//allow anywhere from 2MB up to TASK_SIZE-gap for alignment
+	//we need to be aligned to a megabyte memory boundary for the
+	//page middle directory alignment. 2MB is selected to
+	//avoid starting at the 0MB boundary
+	unsigned long rnd_upper = (TASK_SIZE - gap) >> 20;
+	unsigned long rnd_lower = 2;
+
+	if (rnd_upper <= rnd_lower) {
+		//we have an issue if this happens, assume someone is mucking
+		//with the gap so remove it as an option
+		rnd_upper = TASK_SIZE >> 20;
+	}
+	
+	//randomize the top bits, align to page_size before the boundary
+	//to avoid any risk of hitting the next L2 mmu entry
+	if (current->flags & PF_RANDOMIZE) {
+		gap = get_random_long() % (rnd_upper - rnd_lower);
+		gap = (gap + rnd_lower);
+	}
+	else {
+		gap = rnd_upper;
+	}
+	return (gap << 20) -PAGE_SIZE;
+#endif
 }
 
 /*

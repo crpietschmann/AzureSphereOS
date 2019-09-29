@@ -23,6 +23,9 @@
 
 /* With some changes from Kyösti Mälkki <kmalkki@cc.hut.fi> and
    Frodo Looijaard <frodol@dds.nl> */
+
+/* I2C runtime speed configuration support added by Microsoft 2018 */
+
 #ifndef _LINUX_I2C_H
 #define _LINUX_I2C_H
 
@@ -71,6 +74,10 @@ extern int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 /* Unlocked flavor */
 extern int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 			  int num);
+
+/* Configure speed.
+ */
+extern int i2c_set_speed(struct i2c_adapter *adap, u32 speed_in_hz);
 
 /* This is the very generalized SMBus access routine. You probably do not
    want to use this, though; one of the functions below may be much easier,
@@ -419,6 +426,8 @@ struct i2c_algorithm {
 
 	/* To determine what the adapter supports */
 	u32 (*functionality) (struct i2c_adapter *);
+
+	int (*set_speed)(struct i2c_adapter *adap, u32 speed_in_hz);
 
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 	int (*reg_slave)(struct i2c_client *client);

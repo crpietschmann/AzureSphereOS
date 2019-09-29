@@ -7,6 +7,12 @@
  * Tools".
  *
  * Copyright 1993, 1994: Eric Youngdale (ericy@cais.com).
+ *
+ * Modifications:
+ * - Microsoft Mar 2019 - Change stack alignment to guarantee space for moving
+ *   sigpage before the stack
+ * - Microsoft Mar 2019 - Disable the load bias for executables so they align
+ *   with libraries for page middle directories
  */
 
 #include <linux/module.h>
@@ -544,6 +550,15 @@ static unsigned long load_elf_interp(struct elfhdr *interp_elf_ex,
 		goto out;
 	}
 
+#ifdef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
+	//add up to a random 32k to the total size of the interpreter
+	//this forces randomization between the binary and interpreter
+	//complicating any rop that relies on address calculations
+	if (current->flags & PF_RANDOMIZE) {
+		total_size += (get_random_long() & 0xf) << PAGE_SHIFT;
+	}
+#endif
+
 	eppnt = interp_elf_phdata;
 	for (i = 0; i < interp_elf_ex->e_phnum; i++, eppnt++) {
 		if (eppnt->p_type == PT_LOAD) {
@@ -658,6 +673,14 @@ static unsigned long randomize_stack_top(unsigned long stack_top)
 		random_variable &= STACK_RND_MASK;
 		random_variable <<= PAGE_SHIFT;
 	}
+
+#ifdef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
+	//we forced the stack guard gap to be 1 page so make sure there is a
+	//page prior available for SIGPAGE
+	if (random_variable < (2 << PAGE_SHIFT))
+		random_variable = (2 << PAGE_SHIFT);
+#endif
+
 #ifdef CONFIG_STACK_GROWSUP
 	return PAGE_ALIGN(stack_top) + random_variable;
 #else
@@ -948,13 +971,18 @@ static int load_elf_binary(struct linux_binprm *bprm)
 			 * independently randomized mmap region (0 load_bias
 			 * without MAP_FIXED).
 			 */
+
+			load_bias = 0;
+
+//if we are aligning then disable the load bias so binaries load in line with libraries
+#ifndef CONFIG_AZURE_SPHERE_ASLR_PMD_ALIGN
 			if (elf_interpreter) {
 				load_bias = ELF_ET_DYN_BASE;
 				if (current->flags & PF_RANDOMIZE)
 					load_bias += arch_mmap_rnd();
 				elf_flags |= MAP_FIXED;
-			} else
-				load_bias = 0;
+			}
+#endif
 
 			/*
 			 * Since load_bias is used for all subsequent loading
@@ -1101,7 +1129,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
 
 	if ((current->flags & PF_RANDOMIZE) && (randomize_va_space > 1)) {
 		current->mm->brk = current->mm->start_brk =
-			arch_randomize_brk(current->mm);
+			arch_randomize_brk_with_stack(current->mm, bprm->p);
 #ifdef compat_brk_randomized
 		current->brk_randomized = 1;
 #endif

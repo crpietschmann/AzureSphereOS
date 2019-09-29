@@ -189,6 +189,19 @@ struct security_monitor_derive_key_data {
 #define SECURITY_MONITOR_API_GET_WIFI_FIRMWARE_LOCATION \
 	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 14)
 
+struct security_monitor_get_wifi_firmware_params {
+	struct security_monitor_get_wifi_firmware_params_out {
+		u32 wifi_firmware_address;
+		u32 wifi_firmware_length;
+	} output;
+
+	struct security_monitor_get_wifi_firmware_params_in {
+		// The size of a C++ empty struct is 1 byte, but in C it is 0 bytes, so add a
+		// padding byte.
+		uint8_t padding;
+	} input;
+};
+
 #define SECURITY_MONITOR_API_GET_APPLICATION_IMAGE_COUNT \
 	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 15)
 
@@ -264,16 +277,58 @@ struct security_monitor_derive_key_data {
 #define SECURITY_MONITOR_API_GET_MISSING_BASE_IMAGES_TO_DOWNLOAD \
 	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 39)
 
-struct security_monitor_get_wifi_firmware_params {
-	struct security_monitor_get_wifi_firmware_params_out {
-		u32 wifi_firmware_address;
-		u32 wifi_firmware_length;
-	} output;
+#define SECURITY_MONITOR_API_IO_CORE_CONTROL \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 40)
 
-	struct security_monitor_get_wifi_firmware_params_in {
-		// The size of a C++ empty struct is 1 byte, but in C it is 0 bytes, so add a
-		// padding byte.
-		uint8_t padding;
-	} input;
+#define SECURITY_MONITOR_API_GET_ROLLBACK_INFO \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 41)
+
+#define SECURITY_MONITOR_API_RECORD_TELEMETRY_EVENT_DATA \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 42)
+
+#define SECURITY_MONITOR_API_GET_TELEMETRY_DATA \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 43)
+
+#define SECURITY_MONITOR_API_RESET_TELEMETRY \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 44)
+
+#define SECURITY_MONITOR_API_RETAIN_TELEMETRY \
+	SECURITY_MONITOR_FUNCTION(SECURITY_MONITOR_API_SYNC, 45)
+
+enum security_monitor_io_core_control_action {
+	SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_START_CORE = 0,
+	SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_STOP_CORE = 1,
+	SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_SET_FLAGS = 2,
+	SECURITY_MONITOR_IO_CORE_CONTROL_ACTION_CONFIGURE_COMMUNICATION_BUFFER = 3,
+};
+
+enum security_monitor_io_core_communication_buffer_type {
+	SECURITY_MONITOR_IO_CORE_COMMUNICATION_BUFFER_FROM_IO_CORE = 0,
+	SECURITY_MONITOR_IO_CORE_COMMUNICATION_BUFFER_TO_IO_CORE = 1,
+};
+
+struct security_monitor_io_core_control {
+	struct {
+		uint32_t core_id;
+		uint32_t action;
+		union {
+			struct {
+				uint32_t address;
+				uint32_t size;
+				uint32_t flags;
+			} start_core_params;
+			struct {
+				uint32_t flags;
+			} set_flags_params;
+			struct {
+				uint32_t type;
+				uint32_t address;
+				uint32_t size;
+			} configure_communication_buffer;
+		};
+	} input_params;
+	struct {
+		uint32_t result;
+	} output_params;
 };
 

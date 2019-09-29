@@ -6,6 +6,8 @@
  *
  *  Address space accounting code	<alan@lxorguk.ukuu.org.uk>
  *  (C) Copyright 2002 Red Hat Inc, All Rights Reserved
+ * Modifications:
+ * - Microsoft Apr 2019 - Protection against Write/Execute memory pages
  */
 
 #include <linux/mm.h>
@@ -498,6 +500,17 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 			error = -EACCES;
 			goto out;
 		}
+
+#ifdef CONFIG_AZURE_SPHERE_MMAP_EXEC_PROTECTION
+		/*
+		 * If this memory area had write then mark it as not allowing exec
+		 * security_file_mprotect() does not allow modifying the new flags
+		 * otherwise the LSM would handle this
+		 */
+		if((vma->vm_flags & VM_WRITE) || (reqprot & PROT_WRITE)) {
+			newflags &= ~VM_MAYEXEC;
+		}
+#endif
 
 		error = security_file_mprotect(vma, reqprot, prot);
 		if (error)

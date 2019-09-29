@@ -1,6 +1,6 @@
 #
 # scc v0.8
-# processed: Tue Nov 13 02:03:37 UTC 2018
+# processed: Thu Sep 19 15:15:58 UTC 2019
 #
 # This is a scc output file, do not edit
 #
@@ -34,6 +34,9 @@
 # _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
 # _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
 # _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
+# _reloc_dir /home/rfairfax/src/exp23-yocto/meta-blanca/recipes-kernel/linux
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/defconfig # non-hardware
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/exp23.cfg # non-hardware
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/linux-yocto-exp23/crypto.cfg # non-hardware
@@ -64,3 +67,6 @@ kconf /home/rfairfax/src/exp23-yocto/poky/../meta-exp23/recipes-kernel/linux/lin
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/dma.cfg # non-hardware
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/spi.cfg # non-hardware
 kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/rtc.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/i2c.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/adc.cfg # non-hardware
+kconf /home/rfairfax/src/exp23-yocto/poky/../meta-blanca/recipes-kernel/linux/linux-yocto-exp23/pwm.cfg # non-hardware

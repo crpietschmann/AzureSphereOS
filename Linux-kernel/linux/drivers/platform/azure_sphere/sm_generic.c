@@ -36,11 +36,14 @@
 #include <uapi/linux/azure-sphere/security_monitor.h>
 #include <azure-sphere/security.h>
 #include <linux/skbuff.h>
+#include <linux/fdtable.h>
 #include <azure-sphere/pluton_remoteapi.h>
+#include <linux/of.h>
 
 #include "log.h"
 #include "caller_security.h"
 #include "sm_user.h"
+#include "io_core_comm.h"
 
 ///
 /// SECURITY_MONITOR_SMAPI message handler
@@ -52,7 +55,7 @@ int security_monitor_smapi_command(void __user *arg)
 	u32 ret = 0;
 	struct azure_sphere_smapi_command_request command_data;
 
-	ret = copy_from_user(&command_data, arg, sizeof(struct azure_sphere_smapi_command_request));
+	ret = copy_from_user(&command_data, arg, sizeof(command_data));
 	if (unlikely(ret)) {
 		goto exit;
 	}
@@ -83,7 +86,7 @@ int security_monitor_get_peripheral_count(void __user* arg){
 	int result = 0;
 	struct azure_sphere_peripheral_count command_data;
 	command_data.count = 0;
-	
+
 	ret = copy_from_user(&command_data, arg, sizeof(command_data));
 	if (unlikely(ret)) {
 		command_data.status_code = EINVAL;
@@ -113,16 +116,16 @@ exit:
 int security_monitor_list_peripherals(void __user* arg) {
 	u32 ret = 0;
 	struct azure_sphere_list_peripherals command_data;
-	
+
 	ret = copy_from_user(&command_data, arg, sizeof(command_data));
 	if (unlikely(ret)) {
 		goto exit;
 	}
 
 	ret = azure_sphere_sm_list_peripherals(command_data.peripheral_type,
-		command_data.info, command_data.buffer_size);
+		command_data.info, command_data.buffer_size, command_data.entry_size);
 	if (ret != 0) {
-		dev_err(g_sm_user->dev, "%s failed to execute command (cmd: LIST_ALL_UARTS)\n",
+		dev_err(g_sm_user->dev, "%s failed to execute command (cmd: LIST_ALL_PERIPHERALS)\n",
 			__FUNCTION__);
 	}
 
@@ -132,26 +135,84 @@ exit:
 	return ret;
 }
 
-///
-/// UUID parser code; this is simplified and doesn't correct the byte order.
-///
-/// @arg - uuid target
-/// @arg - uuid ascii source
-/// @returns - 0 for success, otherwise error
-static int azure_sphere_uuid_parse(u8 *uuid, const char *buf)
+static struct device_node *find_peripheral_device_node(u16 peripheral_type, u16 peripheral_index)
 {
-	const char *str = buf;
-	int i;
+	int ret;
+	const char *type_str;
+	char alias[16];
+	struct device_node *device_node;
 
-	for (i = 0; i < 16; i++) {
-		if (!isxdigit(str[0]) || !isxdigit(str[1])) {
-			return -EINVAL;
+	switch (peripheral_type) {
+	case AZURE_SPHERE_UART:
+		type_str = "serial";
+		break;
+	case AZURE_SPHERE_I2C:
+		type_str = "i2c";
+		break;
+	case AZURE_SPHERE_SPI_MASTER:
+		type_str = "spi";
+		break;
+	case AZURE_SPHERE_PWM:
+		type_str = "pwm";
+		break;
+	case AZURE_SPHERE_ADC:
+		type_str = "adc";
+		break;
+	default:
+		return ERR_PTR(-EINVAL);
+	}
+
+	ret = snprintf(alias, sizeof(alias), "%s%u", type_str, (u32)peripheral_index);
+	if (ret <= 0 || ret >= sizeof(alias))
+		return ERR_PTR(-ENOMEM);
+
+	device_node = of_find_node_opts_by_path(alias, NULL);
+	if (!device_node) {
+		dev_err(g_sm_user->dev, "Could not find node in device tree: %s\n", alias);
+		return ERR_PTR(-ENOENT);
+	}
+
+	return device_node;
+}
+
+static int security_monitor_enable_peripheral_driver(void __user* arg)
+{
+	int ret = 0;
+	struct azure_sphere_enable_peripheral_driver command_data;
+	struct device_node *node = NULL;
+
+	ret = copy_from_user(&command_data, arg, sizeof(command_data));
+	if (unlikely(ret))
+		return ret;
+
+	dev_info(g_sm_user->dev, "%s driver for peripheral 0x%x:0x%x\n",
+		command_data.enable ? "Probing" : "Removing",
+		(u32)command_data.peripheral_type,
+		(u32)command_data.peripheral_index);
+
+	node = find_peripheral_device_node(command_data.peripheral_type,
+		command_data.peripheral_index);
+	if (IS_ERR(node)) {
+		// Device doesn't need to be disabled if it doesn't exist
+		if (command_data.enable) {
+			dev_err(g_sm_user->dev, "failed to find peripheral node: 0x%x ret=%ld\n",
+					command_data.peripheral_type, PTR_ERR(node));
+			return PTR_ERR(node);
+		} else {
+			dev_info(g_sm_user->dev, "peripheral to disable not found, continuing without error: 0x%x\n",
+					command_data.peripheral_type);
+			return 0;
 		}
+	}
 
-		uuid[i] = (hex_to_bin(str[0]) << 4) | hex_to_bin(str[1]);
-		str += 2;
-		if (*str == '-')
-			str++;
+	dev_info(g_sm_user->dev, "Found device node: %s\n",
+		node->full_name ? node->full_name : node->name);
+
+	ret = of_device_set_available(node, command_data.enable);
+	if (ret) {
+		dev_err(g_sm_user->dev, "failed to update OF device enablement for peripheral 0x%x:0x%x; ret=%d\n",
+			(u32)command_data.peripheral_type, (u32)command_data.peripheral_index, ret);
+		return ret;
 	}
 
 	return 0;
@@ -163,19 +224,13 @@ static int azure_sphere_uuid_parse(u8 *uuid, const char *buf)
 /// @arg - input data
 /// @returns - 0 for success
 
-#define PREFIX "/mnt/apps/"
-#define PREFIX_LEN 10
-
 int security_monitor_derive_key_command(void __user *arg)
 {
 	u32 ret = 0;
 	struct azure_sphere_derive_key command_data;
-	u8 component_uid[16] = {0};
-	struct file *exe_file;
-	char path_buf[96];
-	char *path;
+    struct azure_sphere_guid component_id;
 
-	ret = copy_from_user(&command_data, arg, sizeof(struct azure_sphere_derive_key));
+	ret = copy_from_user(&command_data, arg, sizeof(command_data));
 	if (unlikely(ret)) {
 		return ret;
 	}
@@ -183,52 +238,17 @@ int security_monitor_derive_key_command(void __user *arg)
 	command_data.result.status_code = -EIO;
 
 	if (!azure_sphere_capable(AZURE_SPHERE_CAP_SFS)) {
-		dev_err(g_sm_user->dev, "%s sender not allowd to access SFS API\n", __FUNCTION__);
+		dev_err(g_sm_user->dev, "%s sender not allowed to access SFS API\n", __FUNCTION__);
 		goto exit;
 	}
 
-	// TODO(39495): obtain caller's identity, depending on command_data.request.key_type
-	// For now, use executable path.
+    //if no security entry then fail, we shouldn't get here but just incase
+    if (!azure_sphere_get_component_id(&component_id, current)) {
+		dev_err(g_sm_user->dev, "%s error accessing security credentials\n", __FUNCTION__);
+        goto exit;
+    }
 
-	// obtain executable file corresponding to current (calling) task
-	exe_file = get_task_exe_file(current);
-
-	if (!exe_file) {
-		command_data.result.status_code = -ENOENT;
-		dev_err(g_sm_user->dev, "%s: get_task_exe_file failed\n", __FUNCTION__);
-		goto exit;
-	}
-
-	// obtain ascii path name for executable file.
-	path = d_path(&exe_file->f_path, path_buf, sizeof(path_buf));
-	fput(exe_file);
-
-	if (IS_ERR(path)) {
-		dev_err(g_sm_user->dev, "%s: d_path failed - %ld\n", __FUNCTION__, PTR_ERR(path));
-		command_data.result.status_code = -ENOENT;
-		goto exit;
-	}
-
-	// if this is a third-party app, it must be in a directory
-	// under /mnt/apps/<component_id>/; extract component_id.
-	if (memcmp(path, PREFIX, PREFIX_LEN) != 0) {
-		dev_err(g_sm_user->dev, "%s: not a 3rd party app\n", __FUNCTION__);
-		// otherwise, it is a non-supported application.
-		command_data.result.status_code = -EINVAL;
-		goto exit;
-	}
-
-	// strip prefix
-	path += PREFIX_LEN;
-
-	// parse uid
-	if (azure_sphere_uuid_parse(component_uid, path) != 0) {
-		dev_err(g_sm_user->dev, "%s: parsing uid failed\n", __FUNCTION__);
-		command_data.result.status_code = -EINVAL;
-		goto exit;
-	}
-
-	command_data.result.status_code = azure_sphere_sm_derive_key(component_uid, command_data.request.generation_delta,
+	command_data.result.status_code = azure_sphere_sm_derive_key(&component_id, command_data.request.generation_delta,
 		&command_data.result.key, &command_data.result.instance, &command_data.result.generation);
 
 exit:
@@ -236,6 +256,146 @@ exit:
 	memzero_explicit(&command_data, sizeof(command_data));
 
 	return ret;
+}
+
+static int get_physical_address_of_file_mapping(unsigned int fd, uintptr_t *value, loff_t *size)
+{
+	int result = 0;
+	struct file *file;
+	struct address_space *mapping;
+	struct inode *inode;
+
+	file = fget(fd);
+
+	if (file) {
+		mapping = file->f_mapping;
+		if (!mapping->a_ops->bmap)
+			result = -EINVAL;
+		else {
+			inode = mapping->host;
+
+			inode_lock(inode);
+			if (inode->i_state & I_DIRTY)
+				result = -ETXTBSY;
+			inode_unlock(inode);
+
+			if (result == 0) {
+				*value = mapping->a_ops->bmap(mapping, 0);
+				*size = i_size_read(inode);
+			}
+		}
+
+		fput(file);
+	} else {
+		result = -ENOENT;
+	}
+
+	return result;
+}
+
+int security_monitor_io_core_control(void __user *arg)
+{
+	int result;
+	uintptr_t physical_address;
+	loff_t physical_size;
+	struct azure_sphere_io_core_control command_data;
+
+	result = copy_from_user(&command_data, arg, sizeof(command_data));
+	if (unlikely(result)) {
+		return result;
+	}
+
+	if (!azure_sphere_capable(AZURE_SPHERE_CAP_PERIPHERAL_PIN_MAPPING)) {
+		dev_err(g_sm_user->dev, "%s sender not allowd to use IO core control API\n", __FUNCTION__);
+		result = -EPERM;
+		goto exit;
+	}
+
+	if (result == 0) {
+		switch (command_data.request) {
+		case AZURE_SPHERE_IO_CORE_CONTROL_RUN:
+#ifdef CONFIG_AZURE_SPHERE_IO_CORE_COMM
+			iocore_communication_stop(command_data.core);
+#endif
+			result = get_physical_address_of_file_mapping(command_data.fd, &physical_address, &physical_size);
+			if (result == 0)
+			{
+				result = azure_sphere_sm_io_core_start(command_data.core, physical_address,
+				                                       physical_size, command_data.flags);
+			}
+			break;
+		case AZURE_SPHERE_IO_CORE_CONTROL_STOP:
+#ifdef CONFIG_AZURE_SPHERE_IO_CORE_COMM
+			iocore_communication_stop(command_data.core);
+#endif
+			result = azure_sphere_sm_io_core_stop(command_data.core);
+			break;
+		case AZURE_SPHERE_IO_CORE_CONTROL_START_COMMUNICATION:
+#ifdef CONFIG_AZURE_SPHERE_IO_CORE_COMM
+			result = iocore_communication_start(command_data.core, command_data.component_id);
+#else
+			result = -ENOSYS;
+#endif
+			break;
+		default:
+			result = -EINVAL;
+			break;
+		}
+	}
+exit:
+
+	return result;
+}
+
+int security_monitor_record_telemetry_event_data(void __user *arg)
+{
+	int result;
+	struct azure_sphere_telemetry_record_event_data command_data;
+
+	result = copy_from_user(&command_data, arg, sizeof(command_data));
+	if (unlikely(result)) {
+		return result;
+	}
+
+	if (result == 0) {
+		result = azure_sphere_sm_record_telemetry_event_data(command_data.id,
+				    									     command_data.event_timestamp,
+												             command_data.payload_length,
+													         command_data.payload);
+	}
+	return result;
+}
+
+int security_monitor_get_telemetry(void __user *arg)
+{
+	int result;
+	struct azure_sphere_get_telemetry command_data;
+
+	result = copy_from_user(&command_data, arg, sizeof(command_data));
+	if (unlikely(result)) {
+		return result;
+	}
+
+	if (result == 0) {
+		result = azure_sphere_sm_get_telemetry(command_data.offset, command_data.buffer, command_data.buffer_size);
+	}
+	return result;
+}
+
+int security_monitor_reset_retain_telemetry(void __user *arg)
+{
+	int result;
+	struct azure_sphere_reset_retain_telemetry command_data;
+
+	result = copy_from_user(&command_data, arg, sizeof(command_data));
+	if (unlikely(result)) {
+		return result;
+	}
+
+	if (result == 0) {
+		result = azure_sphere_sm_reset_retain_telemetry(command_data.retain);
+	}
+	return result;
 }
 
 long security_monitor_ioctl(struct file *filp, unsigned int cmd, unsigned long arg_)
@@ -255,6 +415,16 @@ long security_monitor_ioctl(struct file *filp, unsigned int cmd, unsigned long a
 		return security_monitor_get_peripheral_count(arg);
 	case SECURITY_MONITOR_LIST_PERIPHERALS:
 		return security_monitor_list_peripherals(arg);
+	case SECURITY_MONITOR_ENABLE_PERIPHERAL_DRIVER:
+		return security_monitor_enable_peripheral_driver(arg);
+	case SECURITY_MONITOR_IO_CORE_CONTROL:
+		return security_monitor_io_core_control(arg);
+	case SECURITY_MONITOR_RECORD_TELEMETRY_EVENT_DATA:
+		return security_monitor_record_telemetry_event_data(arg);
+	case SECURITY_MONITOR_GET_TELEMETRY:
+		return security_monitor_get_telemetry(arg);
+	case SECURITY_MONITOR_RESET_RETAIN_TELEMETRY:
+		return security_monitor_reset_retain_telemetry(arg);
 	default:
 		return -EINVAL;
 	}

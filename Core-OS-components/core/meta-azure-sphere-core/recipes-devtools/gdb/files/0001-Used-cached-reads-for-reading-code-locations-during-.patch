@@ -15,7 +15,7 @@ diff --git a/gdb/arm-tdep.c b/gdb/arm-tdep.c
 index 5a2d490..c3a9c74 100644
 --- a/gdb/arm-tdep.c
 +++ b/gdb/arm-tdep.c
-@@ -790,7 +790,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+@@ -783,7 +783,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
  	  CORE_ADDR loc;
  
  	  loc = start + 4 + bits (insn, 0, 7) * 4;
@@ -24,7 +24,7 @@ index 5a2d490..c3a9c74 100644
  	  regs[bits (insn, 8, 10)] = pv_constant (constant);
  	}
        else if (thumb_insn_size (insn) == 4) /* 32-bit Thumb-2 instructions.  */
-@@ -1030,7 +1030,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+@@ -1023,7 +1023,7 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
  	      else
  		loc = start + 4 - offset;
  
@@ -33,7 +33,7 @@ index 5a2d490..c3a9c74 100644
  	      regs[bits (inst2, 12, 15)] = pv_constant (constant);
  	    }
  
-@@ -1046,10 +1046,10 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
+@@ -1039,10 +1039,10 @@ thumb_analyze_prologue (struct gdbarch *gdbarch,
  	      else
  		loc = start + 4 - offset;
  
@@ -46,7 +46,7 @@ index 5a2d490..c3a9c74 100644
  	      regs[bits (inst2, 8, 11)] = pv_constant (constant);
  	    }
  
-@@ -1148,7 +1148,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
+@@ -1137,7 +1137,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
  	  *destreg = bits (insn1, 8, 10);
  	  *offset = 2;
  	  address = (pc & 0xfffffffc) + 4 + (bits (insn1, 0, 7) << 2);
@@ -55,7 +55,7 @@ index 5a2d490..c3a9c74 100644
  						  byte_order_for_code);
  	}
        else if ((insn1 & 0xfbf0) == 0xf240) /* movw Rd, #const */
-@@ -1181,7 +1181,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
+@@ -1170,7 +1170,7 @@ arm_analyze_load_stack_chk_guard(CORE_ADDR pc, struct gdbarch *gdbarch,
        if ((insn & 0x0e5f0000) == 0x041f0000) /* ldr Rd, [PC, #immed] */
  	{
  	  address = bits (insn, 0, 11) + pc + 8;
@@ -64,7 +64,7 @@ index 5a2d490..c3a9c74 100644
  						  byte_order_for_code);
  
  	  *destreg = bits (insn, 12, 15);
-@@ -2927,7 +2927,7 @@ arm_stub_unwind_sniffer (const struct frame_unwind *self,
+@@ -2907,7 +2907,7 @@ arm_stub_unwind_sniffer (const struct frame_unwind *self,
    if (in_plt_section (addr_in_block)
        /* We also use the stub winder if the target memory is unreadable
  	 to avoid having the prologue unwinder trying to read it.  */
@@ -73,7 +73,7 @@ index 5a2d490..c3a9c74 100644
      return 1;
  
    if (find_pc_partial_function (pc, &name, &start_addr, NULL) == 0
-@@ -6261,7 +6261,7 @@ ULONGEST
+@@ -6208,7 +6208,7 @@ ULONGEST
  arm_get_next_pcs_read_memory_unsigned_integer (CORE_ADDR memaddr, int len,
  					       int byte_order)
  {
@@ -86,20 +86,20 @@ diff --git a/gdb/breakpoint.c b/gdb/breakpoint.c
 index f99a7ab..7b5452a 100644
 --- a/gdb/breakpoint.c
 +++ b/gdb/breakpoint.c
-@@ -9097,7 +9097,7 @@ program_breakpoint_here_p (struct gdbarch *gdbarch, CORE_ADDR address)
-      breakpoints they are permanent.  */
-   cleanup = make_show_memory_breakpoints_cleanup (0);
+@@ -8649,7 +8649,7 @@ program_breakpoint_here_p (struct gdbarch *gdbarch, CORE_ADDR address)
+   scoped_restore restore_memory
+     = make_scoped_restore_show_memory_breakpoints (0);
  
 -  if (target_read_memory (address, target_mem, len) == 0
 +  if (target_read_code (address, target_mem, len) == 0
        && memcmp (target_mem, bpoint, len) == 0)
-     retval = 1;
+     return 1;
  
 diff --git a/gdb/frame.c b/gdb/frame.c
 index d621dd7..f35816c 100644
 --- a/gdb/frame.c
 +++ b/gdb/frame.c
-@@ -2674,7 +2674,7 @@ safe_frame_unwind_memory (struct frame_info *this_frame,
+@@ -2677,7 +2677,7 @@ safe_frame_unwind_memory (struct frame_info *this_frame,
  			  CORE_ADDR addr, gdb_byte *buf, int len)
  {
    /* NOTE: target_read_memory returns zero on success!  */

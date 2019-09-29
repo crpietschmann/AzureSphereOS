@@ -114,33 +114,6 @@ struct asxipfs_super {
 };
 
 /*
- * Capabilities block stored after file data
- */
-struct capabilities_block {
-	uint32_t block_size;    /* size of this structure; little endian */
-	uint32_t caps_present:8, unused:24;
-	uint32_t caps_size; /* size of encoded capabilities; little endian */
-	uint32_t encoded_caps[]; /* encoded capabilities; little endian; flex array */
-};
-
-/*
- * Entry in the xattr table for a file
- */
-struct asxipfs_xattr_entry {
-	__u16 xattr_size; /* Size of xattr data */
-	__u16 name_size; /* Size of name field */
-	__u8 name[];
-};
-
-/*
- * Table of xattrs for a file
- */
-struct asxipfs_xattr_table_header {
-	__u16 table_size; /* Size of the table, in bytes */
-	__u16 count; /* Count of table entries */
-};
-
-/*
  * Feature flags
  */
 #define ASXIPFS_FLAG_FSID_VERSION_2	0x00000001	/* fsid version #2 */
@@ -148,12 +121,15 @@ struct asxipfs_xattr_table_header {
 #define ASXIPFS_FLAG_CAPABILITIES	0x00000004	/* file capabilities */
 #define ASXIPFS_FLAG_WRONG_SIGNATURE	0x00000200	/* reserved */
 #define ASXIPFS_FLAG_SHIFTED_ROOT_OFFSET	0x00000400	/* shifted root fs */
-#define ASXIPFS_FLAG_XATTR			0x00000800 /* extended attribute suport */
+#define ASXIPFS_FLAG_XATTR			0x00000800 /* extended attribute support */
 
 /*
  * Valid values in super.flags.  Currently we refuse to mount
  * if (flags & ~ASXIPFS_SUPPORTED_FLAGS).  Maybe that should be
  * changed to test super.future instead.
+ * Note: we still have the XATTR flag for compatibility on loads
+ * although we are no longer supporting XATTR as it is unknown
+ * if we are just setting it on current images
  */
 #define ASXIPFS_SUPPORTED_FLAGS	( 0x000000ff \
 				| ASXIPFS_FLAG_WRONG_SIGNATURE \

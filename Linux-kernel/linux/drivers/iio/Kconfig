@@ -30,6 +30,14 @@ config IIO_CONFIGFS
 	  (e.g. software triggers). For more info see
 	  Documentation/iio/iio_configfs.txt.
 
+config IIO_IOCTL
+	tristate "Enable support for IIO IOCTLs"
+	help
+	  This allows for using IOCTLs instead of the sysfs interfaces
+	  to communicate with IIO devices.  This may be helpful when used
+	  in striped down versions of linux that do not have support for sysfs 
+	  because there is insufficient RAM on the target hardware.
+	  
 config IIO_TRIGGER
 	bool "Enable triggered sampling support"
 	help

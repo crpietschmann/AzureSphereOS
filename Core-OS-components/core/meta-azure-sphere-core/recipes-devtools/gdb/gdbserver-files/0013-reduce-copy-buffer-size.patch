@@ -1,0 +1,26 @@
+From 92c4d042319cd4b54fca88ba7acaa0e2ec5b8c52 Mon Sep 17 00:00:00 2001
+From: Azure Sphere Team <azuresphereoss@microsoft.com>
+Date: Tue, 16 Jan 2018 13:30:23 -0800
+Subject: [PATCH] reduce copy buffer size
+
+---
+ gdb/gdbserver/server.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/gdb/gdbserver/server.h b/gdb/gdbserver/server.h
+index 28d754f..b5b5dc2 100644
+--- a/gdb/gdbserver/server.h
++++ b/gdb/gdbserver/server.h
+@@ -113,7 +113,8 @@ extern void discard_queued_stop_replies (ptid_t ptid);
+ /* Buffer sizes for transferring memory, registers, etc.   Set to a constant
+    value to accomodate multiple register formats.  This value must be at least
+    as large as the largest register set supported by gdbserver.  */
+-#define PBUFSIZ 18432
++#define PBUFSIZ 4096 
++/* 18432 */
+ 
+ /* Definition for an unknown syscall, used basically in error-cases.  */
+ #define UNKNOWN_SYSCALL (-1)
+-- 
+2.7.4
+

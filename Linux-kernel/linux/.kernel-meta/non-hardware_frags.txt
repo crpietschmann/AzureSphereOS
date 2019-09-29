@@ -28,3 +28,6 @@
 /home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///dma.cfg
 /home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///spi.cfg
 /home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///rtc.cfg
+/home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///i2c.cfg
+/home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///adc.cfg
+/home/rfairfax/build/exp23/out/work-shared/blanca/kernel-source/.kernel-meta/configs///pwm.cfg

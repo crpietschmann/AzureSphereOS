@@ -202,11 +202,11 @@ static void copy_to_if_dqblk(struct if_dqblk *dst, struct qc_dqblk *src)
 	dst->dqb_itime = src->d_ino_timer;
 
 	dst->dqb_valid = 0;
-	if (src->d_fieldmask & QC_SPC_SOFT | src->d_fieldmask & QC_SPC_HARD)
+	if (src->d_fieldmask & (QC_SPC_SOFT | QC_SPC_HARD))
 		dst->dqb_valid |= QIF_BLIMITS;
 	if (src->d_fieldmask & QC_SPACE)
 		dst->dqb_valid |= QIF_SPACE;
-	if (src->d_fieldmask & QC_INO_SOFT | src->d_fieldmask & QC_INO_HARD)
+	if (src->d_fieldmask & (QC_INO_SOFT | QC_INO_HARD))
 		dst->dqb_valid |= QIF_ILIMITS;
 	if (src->d_fieldmask & QC_INO_COUNT)
 		dst->dqb_valid |= QIF_INODES;
