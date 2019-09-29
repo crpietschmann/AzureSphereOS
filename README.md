@@ -10,6 +10,8 @@ This repository contains a few different folders for the different open source d
 - [Linux kernel](Linux-kernel)
 - [TAP](/TAP)
 
+> This repository does NOT contain the full source code for the Azure Sphere OS. This is a subset of the source code, and only the source code that has been released under the GPL license by Microsoft.
+
 ## DISCLAIMER
 
 This is not the official repository for the source code, and is not affiliated with Microsoft. If you're looking to download the open source source code for the Azure Sphere OS (Operating System), then you'll need to go to <https://3rdpartysource.microsoft.com/>, search for "Azure Sphere" and download it from there. This repository is only meant for learning and discovery purposes.
