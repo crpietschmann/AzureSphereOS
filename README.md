@@ -18,6 +18,8 @@ Here are the release dates, along with announcement and release notes links for 
 
 | Release Date | Version | Links |
 | --- | --- | --- |
+| December 6, 2019 | Preview 19.11 | [Announcement](https://azure.microsoft.com/en-us/updates/update-19-11-for-azure-sphere-now-available/) / [Release Notes](https://docs.microsoft.com/en-us/azure-sphere/resources/release-notes-1911)
+| November 7, 2019 | Preview 19.10 | [Announcement](https://azure.microsoft.com/en-us/updates/update-19-10-for-azure-sphere-now-available/) / [Release Notes](https://docs.microsoft.com/en-us/azure-sphere/resources/release-notes-1910)
 | September 25, 2019 | Preview 19.09 | [Announcement](https://azure.microsoft.com/en-us/updates/update-19-09-for-azure-sphere-public-preview-now-available-for-evaluation/) / [Release Notes](https://docs.microsoft.com/en-us/azure-sphere/resources/release-notes-1909)
 | July 17, 2019 | Preview 19.07 | [Announcement](https://azure.microsoft.com/en-us/updates/update-19-07-for-azure-sphere-public-preview-now-available-for-evaluation/) / [Release Notes](https://docs.microsoft.com/en-us/azure-sphere/resources/release-notes-1905)
 | June 24, 2019 | Preview 19.06 | [Announcement](https://azure.microsoft.com/en-us/updates/update-19-06-for-azure-sphere-public-preview-now-available-for-evaluation/) / [Release Notes](https://docs.microsoft.com/en-us/azure-sphere/resources/release-notes-1905)
