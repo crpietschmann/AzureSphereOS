@@ -1,6 +1,6 @@
-# AzureSphereOS
+# Azure Sphere OS Source Code
 
-This repository contains the GPL licensed source code for the open source Azure Sphere OS from Microsoft.
+This repository contains the GPL licensed source code for the open source [Azure Sphere](https://en.wikipedia.org/wiki/Azure_Sphere) OS from Microsoft.
 
 Version in this Repo: **Azure Sphere OS 19.09 Preview**
 
@@ -10,7 +10,7 @@ This repository contains a few different folders for the different open source d
 - [Linux kernel](Linux-kernel)
 - [TAP](/TAP)
 
-> This repository does NOT contain the full source code for the Azure Sphere OS. This is a subset of the source code, and only the source code that has been released under the GPL license by Microsoft.
+> **Note**: This repository does NOT contain the full source code for the Azure Sphere OS. This is a subset of the source code, and only the source code that has been released under the GPL license by Microsoft.
 
 ## Azure Sphere OS Releases
 
@@ -36,7 +36,7 @@ This is not the official repository for the source code, and is not affiliated w
 
 This project / repository is neither affiliated with, nor authorized, sponsored, or approved by, Microsoft Corporation. All trademarks are the property of their respective owners.
 
-> Please reference the [LICENSE](/LICENSE) for details on the licensing of the source code and other files within this repository.
+> **License**: Please reference the [LICENSE](/LICENSE) for details on the licensing of the source code and other files within this repository.
 
 ## No Pull Requests or Issues Accepted
 
