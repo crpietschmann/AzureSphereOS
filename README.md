@@ -36,7 +36,7 @@ This is not the official repository for the source code, and is not affiliated w
 
 This project / repository is neither affiliated with, nor authorized, sponsored, or approved by, Microsoft Corporation. All trademarks are the property of their respective owners.
 
-Please reference the LICENSE for details on the licensing of the source code and other files within this repository.
+Please reference the [LICENSE](/LICENSE) for details on the licensing of the source code and other files within this repository.
 
 ## No Pull Requests or Issues Accepted
 
